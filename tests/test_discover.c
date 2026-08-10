@@ -97,6 +97,14 @@ TEST(skip_fast_testdata) {
     ASSERT_TRUE(cbm_should_skip_dir("testdata", CBM_MODE_FAST));
     PASS();
 }
+TEST(no_skip_fast_scripts) {
+    ASSERT_FALSE(cbm_should_skip_dir("scripts", CBM_MODE_FAST));
+    PASS();
+}
+TEST(no_skip_fast_tools) {
+    ASSERT_FALSE(cbm_should_skip_dir("tools", CBM_MODE_FAST));
+    PASS();
+}
 TEST(skip_fast_generated) {
     ASSERT_TRUE(cbm_should_skip_dir("generated", CBM_MODE_FAST));
     PASS();
@@ -732,6 +740,8 @@ SUITE(discover) {
     RUN_TEST(skip_fast_tests);
     RUN_TEST(skip_fast_fixtures);
     RUN_TEST(skip_fast_testdata);
+    RUN_TEST(no_skip_fast_scripts);
+    RUN_TEST(no_skip_fast_tools);
     RUN_TEST(skip_fast_generated);
     RUN_TEST(skip_fast_assets);
     RUN_TEST(skip_fast_3rdparty);

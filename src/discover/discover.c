@@ -52,8 +52,8 @@ static const char *FAST_SKIP_DIRS[] = {
     "doc",       "documentation", "examples",       "example",      "samples",     "sample",
     "assets",    "static",        "public",         "media",        "third_party", "thirdparty",
     "3rdparty",  "external",      "migrations",     "seeds",        "e2e",         "integration",
-    "locale",    "locales",       "i18n",           "l10n",         "scripts",     "tools",
-    "hack",      "bin",           "build",          "out",          NULL};
+    "locale",    "locales",       "i18n",           "l10n",         "hack",        "bin",
+    "build",     "out",           NULL};
 
 /* ── Ignored suffixes ───────────────────────────────── */
 
