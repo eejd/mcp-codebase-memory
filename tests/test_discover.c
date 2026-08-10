@@ -97,6 +97,22 @@ TEST(skip_fast_testdata) {
     ASSERT_TRUE(cbm_should_skip_dir("testdata", CBM_MODE_FAST));
     PASS();
 }
+TEST(no_skip_fast_scripts) {
+    ASSERT_FALSE(cbm_should_skip_dir("scripts", CBM_MODE_FAST));
+    PASS();
+}
+TEST(no_skip_fast_tools) {
+    ASSERT_FALSE(cbm_should_skip_dir("tools", CBM_MODE_FAST));
+    PASS();
+}
+TEST(no_skip_moderate_scripts) {
+    ASSERT_FALSE(cbm_should_skip_dir("scripts", CBM_MODE_MODERATE));
+    PASS();
+}
+TEST(no_skip_moderate_tools) {
+    ASSERT_FALSE(cbm_should_skip_dir("tools", CBM_MODE_MODERATE));
+    PASS();
+}
 TEST(skip_fast_generated) {
     ASSERT_TRUE(cbm_should_skip_dir("generated", CBM_MODE_FAST));
     PASS();
@@ -605,6 +621,45 @@ TEST(discover_generic_dirs_fast_mode) {
     PASS();
 }
 
+TEST(discover_operational_scripts_in_filtered_modes) {
+    char *base = th_mktempdir("cbm_disc_ops");
+    ASSERT(base != NULL);
+
+    th_write_file(TH_PATH(base, "scripts/release.py"), "def release(): pass\n");
+    th_write_file(TH_PATH(base, "tools/migrate.py"), "def migrate(): pass\n");
+    th_write_file(TH_PATH(base, "docs/guide.py"), "def guide(): pass\n");
+    th_write_file(TH_PATH(base, "generated/client.py"), "def client(): pass\n");
+    th_write_file(TH_PATH(base, "fixtures/sample.py"), "def sample(): pass\n");
+    th_write_file(TH_PATH(base, "node_modules/pkg/index.js"), "export {};\n");
+    th_write_file(TH_PATH(base, "build/output.py"), "def output(): pass\n");
+
+    const cbm_index_mode_t modes[] = {CBM_MODE_MODERATE, CBM_MODE_FAST};
+    for (int mode_idx = 0; mode_idx < 2; mode_idx++) {
+        cbm_discover_opts_t opts = {.mode = modes[mode_idx]};
+        cbm_file_info_t *files = NULL;
+        int count = 0;
+
+        int rc = cbm_discover(base, &opts, &files, &count);
+        ASSERT_EQ(rc, 0);
+        ASSERT_EQ(count, 2);
+
+        bool found_script = false;
+        bool found_tool = false;
+        for (int i = 0; i < count; i++) {
+            if (strcmp(files[i].rel_path, "scripts/release.py") == 0)
+                found_script = true;
+            if (strcmp(files[i].rel_path, "tools/migrate.py") == 0)
+                found_tool = true;
+        }
+        ASSERT_TRUE(found_script);
+        ASSERT_TRUE(found_tool);
+        cbm_discover_free(files, count);
+    }
+
+    th_cleanup(base);
+    PASS();
+}
+
 TEST(discover_cbmignore_no_git) {
     char *base = th_mktempdir("cbm_disc_nogit");
     ASSERT(base != NULL);
@@ -732,6 +787,10 @@ SUITE(discover) {
     RUN_TEST(skip_fast_tests);
     RUN_TEST(skip_fast_fixtures);
     RUN_TEST(skip_fast_testdata);
+    RUN_TEST(no_skip_fast_scripts);
+    RUN_TEST(no_skip_fast_tools);
+    RUN_TEST(no_skip_moderate_scripts);
+    RUN_TEST(no_skip_moderate_tools);
     RUN_TEST(skip_fast_generated);
     RUN_TEST(skip_fast_assets);
     RUN_TEST(skip_fast_3rdparty);
@@ -792,6 +851,7 @@ SUITE(discover) {
     RUN_TEST(discover_new_ignore_patterns);
     RUN_TEST(discover_generic_dirs_full_mode);
     RUN_TEST(discover_generic_dirs_fast_mode);
+    RUN_TEST(discover_operational_scripts_in_filtered_modes);
     RUN_TEST(discover_cbmignore_no_git);
 
     /* Nested .gitignore tests (issue #178) */

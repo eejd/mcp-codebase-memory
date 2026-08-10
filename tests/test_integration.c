@@ -525,7 +525,7 @@ TEST(integ_store_bfs_traversal) {
 }
 
 /* #411: index_repository silently drops entire subtrees with no record.
- * Moderate/fast mode applies FAST_SKIP_DIRS (tools/scripts/bin/docs/...) and ALL
+ * Moderate/fast mode applies FAST_SKIP_DIRS (bin/docs/...) and ALL
  * modes apply ALWAYS_SKIP_DIRS (node_modules/...), so files are excluded from the
  * graph — but the response only reports nodes/edges/status, giving the user no
  * way to know which subtrees were dropped (the reporter lost a 47-file tools/).
