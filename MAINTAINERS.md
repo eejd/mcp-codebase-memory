@@ -44,7 +44,7 @@ review areas for future co-maintainers.
 | Packaging and distribution | `pkg/`, `install.sh`, `install.ps1`, `server.json`, `glama.json`, `flake.nix`, `flake.lock`, `THIRD_PARTY.md`, `scripts/gen-third-party-notices.sh`, `scripts/gen-ui-licenses.py`, release archive contents | TBD | `@DeusData` |
 | Security and supply chain | `SECURITY.md`, `docs/SECURITY-DISCLOSURE.md`, `scripts/security-*`, `scripts/*license*`, `scripts/*allowlist*`, `.github/workflows/codeql.yml`, `.github/workflows/scorecard.yml` | `@DeusData` only initially | `@DeusData` |
 | CI and release operations | `.github/workflows/`, `scripts/ci/`, `Makefile.cbm` | `@DeusData` only initially | `@DeusData` |
-| Governance and contribution policy | `.github/CODEOWNERS`, `MAINTAINERS.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `DCO`, `LICENSE`, `.github/pull_request_template.md`, issue templates | `@DeusData` only initially | `@DeusData` |
+| Governance and contribution policy | `.github/CODEOWNERS`, `MAINTAINERS.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE`, `.github/pull_request_template.md`, issue templates | `@DeusData` only initially | `@DeusData` |
 
 ## Operational Authority
 
@@ -52,7 +52,7 @@ Operational authority is stricter than code review authority.
 
 | Operation | Current authority | Project rule |
 | --- | --- | --- |
-| PR validation (`pr.yml`, DCO, CodeQL) | Automatic | Anyone may trigger it by opening or updating a PR. Required checks must pass. |
+| PR validation (`pr.yml`, CodeQL) | Automatic | Anyone may trigger it by opening or updating a PR. Required checks must pass. |
 | Dry run (`dry-run.yml`) | `@DeusData` | Delegated release operators may run dry runs after promotion. Dry-run delegation does not imply release authority. |
 | Smoke/soak/repro manual runs | `@DeusData` | Area reviewers may operate these runs when delegated for diagnosis. Results are advisory. |
 | Release workflow (`release.yml`) | `@DeusData` only | Owner-only until a release operator is explicitly promoted. Publishing, replacing releases, and tag movement remain owner-gated. |
@@ -117,7 +117,7 @@ Promotion is gradual, explicit, and reversible.
 
 | Stage | Requirements | Capabilities |
 | --- | --- | --- |
-| Trusted contributor | Focused PRs, clean DCO, responsive review cycles. | No elevated access. |
+| Trusted contributor | Focused PRs and responsive review cycles. | No elevated access. |
 | Triage collaborator | Consistent issue reproduction and respectful scope control. | Issue triage and review requests. |
 | Area reviewer | Sustained, technically accurate reviews in one area. | Advisory review listing in this file. |
 | Release operator | Proven reliability on dry runs, packaging, and release checklists. | May run delegated dry runs and prepare releases. |
