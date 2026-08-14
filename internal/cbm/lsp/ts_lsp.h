@@ -40,6 +40,10 @@ typedef struct {
 
     // Output: resolved calls accumulate here.
     CBMResolvedCallArray *resolved_calls;
+    // Optional raw usages owned by the per-file extraction result. The scope
+    // pass marks occurrence-exact module/import shadows without emitting a
+    // semantic reference record for them.
+    CBMUsageArray *usages;
 
     // Type-parameter scope (innermost generic function/class).
     // type_param_constraints may be NULL or shorter — entries default to "any".
@@ -51,6 +55,7 @@ typedef struct {
     bool js_mode;
     bool jsx_mode;
     bool dts_mode;
+    bool cross_file_mode; // project-wide registry is available for exact reference proof
     bool strict; // tsconfig "strict": true → fewer implicit-any fallbacks
     bool debug;  // CBM_LSP_DEBUG env
 
@@ -122,6 +127,11 @@ void cbm_run_ts_lsp_cross_with_registry(CBMArena *arena, const char *source, int
 // Object, Function, console, JSON) into a registry. v1 is hand-curated; a generator script
 // will replace this in v1.3.
 void cbm_ts_stdlib_register(CBMTypeRegistry *reg, CBMArena *arena);
+
+// TEST HOOKS: count of full per-file cross-registry builds (the quadratic the
+// shared-registry dispatch eliminates; must stay 0 on the shared path).
+long cbm_ts_full_registry_builds(void);
+void cbm_ts_full_registry_builds_reset(void);
 
 // --- Batch cross-file LSP ---
 

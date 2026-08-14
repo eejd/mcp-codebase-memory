@@ -6,6 +6,7 @@
 #include "foundation/constants.h"
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 
 enum {
     JSON_ESC_LEN = 2,       /* escaped char takes 2 bytes (backslash + char) */
@@ -270,6 +271,23 @@ bool cbm_validate_shell_arg(const char *s) {
     return true;
 }
 
+bool cbm_validate_shell_path_arg(const char *path) {
+    if (!cbm_validate_shell_arg(path)) {
+        return false;
+    }
+#ifdef _WIN32
+    /* cmd.exe expands %VAR% and, with delayed expansion, !VAR! inside the
+     * double quotes these commands use; ^ is its escape character. None of the
+     * three can be neutralised by quoting, so reject them outright. */
+    for (const char *p = path; *p; p++) {
+        if (*p == '%' || *p == '!' || *p == '^') {
+            return false;
+        }
+    }
+#endif
+    return true;
+}
+
 bool cbm_validate_project_name(const char *name) {
     if (!name || !*name)
         return false;
@@ -328,8 +346,11 @@ int cbm_json_escape(char *buf, int bufsize, const char *src) {
             buf[pos++] = '\\';
             buf[pos++] = 't';
         } else if (c < JSON_CTRL_LIMIT) {
-            /* Other control chars: skip */
-            continue;
+            /* Other control chars: escape as \u00XX */
+            if (pos + 6 > bufsize - JSON_NUL_RESERVE) {
+                break;
+            }
+            pos += snprintf(buf + pos, 7, "\\u%04x", c);
         } else {
             buf[pos++] = (char)c;
         }
