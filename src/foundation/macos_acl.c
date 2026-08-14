@@ -34,7 +34,7 @@ bool cbm_macos_extended_acl_fd_is_empty(int fd) {
     return entry_result == -1 && entry_error == EINVAL && free_result == 0;
 }
 
-bool cbm_macos_extended_acl_fd_is_deny_only(int fd) {
+bool cbm_macos_extended_acl_fd_is_ancestor_safe(int fd) {
     if (fd < 0) {
         return false;
     }
@@ -63,7 +63,17 @@ bool cbm_macos_extended_acl_fd_is_deny_only(int fd) {
             break;
         }
         acl_tag_t tag = (acl_tag_t)0;
-        if (acl_get_tag_type(entry, &tag) != 0 || tag != ACL_EXTENDED_DENY) {
+        if (acl_get_tag_type(entry, &tag) != 0) {
+            safe = false;
+            break;
+        }
+        if (tag == ACL_EXTENDED_ALLOW) {
+            acl_permset_mask_t mask = 0;
+            if (acl_get_permset_mask_np(entry, &mask) != 0 || mask != ACL_SEARCH) {
+                safe = false;
+                break;
+            }
+        } else if (tag != ACL_EXTENDED_DENY) {
             safe = false;
             break;
         }
@@ -93,7 +103,7 @@ bool cbm_macos_extended_acl_fd_is_empty(int fd) {
     return fd >= 0;
 }
 
-bool cbm_macos_extended_acl_fd_is_deny_only(int fd) {
+bool cbm_macos_extended_acl_fd_is_ancestor_safe(int fd) {
     return fd >= 0;
 }
 

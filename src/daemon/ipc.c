@@ -1387,7 +1387,7 @@ static bool posix_directory_parent_secure(int directory_fd) {
     struct stat status;
     if (directory_fd < 0 || fstat(directory_fd, &status) != 0 || !S_ISDIR(status.st_mode) ||
         !posix_directory_owner_trusted(status.st_uid) ||
-        !cbm_macos_extended_acl_fd_is_deny_only(directory_fd)) {
+        !cbm_macos_extended_acl_fd_is_ancestor_safe(directory_fd)) {
         return false;
     }
     /* #1537: this ANCESTOR check refused any group-write bit, which is the same
@@ -1468,7 +1468,7 @@ static int private_directory_tree_open(const char *directory_path) {
                  * An unset errno is not a diagnosis; name the component. */
                 ipc_validation_detail_set("%s: ancestor '%s' is not a usable private-directory "
                                           "parent (must be owned by you, not world-writable, and "
-                                          "carry no allow-ACL)",
+                                          "carry no ACL that grants more than search)",
                                           directory_path, component);
             }
             bool created = ok && mkdirat(current_fd, component, 0700) == 0;
