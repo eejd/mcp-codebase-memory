@@ -210,7 +210,7 @@ typedef struct State State;
 
 // Return true if any heredoc is started
 static bool has_active_heredoc(State *state) {
-    for (uint8_t i = 0; i < state->heredocs.size; i++) {
+    for (uint32_t i = 0; i < state->heredocs.size; i++) {
         if (array_get(&state->heredocs, i)->started) {
             return true;
         }
@@ -230,7 +230,7 @@ static bool has_unstarted_heredoc(State *state) {
 // Return the number of bytes currently stored across all heredocs
 static size_t heredoc_current_buffer_size(State *state) {
     size_t bytes = 0;
-    for (uint8_t i = 0; i < state->heredocs.size; i++) {
+    for (uint32_t i = 0; i < state->heredocs.size; i++) {
         bytes += array_get(&state->heredocs, i)->identifier.size;
     }
     return bytes;
@@ -606,7 +606,7 @@ static bool scan_heredoc_contents(State *state, TSLexer *lexer, const bool *vali
         // The first heredoc in the queue isn't started, which means it's a
         // pending nested heredoc that will begin on the next line.
         heredoc_pending_start = true;
-        for (uint8_t i = 1; i < state->heredocs.size; i++) {
+        for (uint32_t i = 1; i < state->heredocs.size; i++) {
             if (array_get(&state->heredocs, i)->started) {
                 active_heredoc = array_get(&state->heredocs, i);
                 break;
@@ -3106,6 +3106,15 @@ static void free_old_heredoc_identifiers(State *state) {
     }
 }
 
+static void reset_deserialized_state(State *state) {
+    free_old_heredoc_identifiers(state);
+    array_clear(&state->literals);
+    array_clear(&state->heredocs);
+    state->has_leading_whitespace = false;
+    state->previous_line_continued = false;
+    reset_macro_state(state);
+}
+
 void tree_sitter_crystal_external_scanner_destroy(void *payload) {
     State *state = (State *)payload;
 
@@ -3140,7 +3149,7 @@ unsigned tree_sitter_crystal_external_scanner_serialize(void *payload, char *buf
     buffer[offset++] = (char)state->heredocs.size;
 
     // Heredoc are serialized one at a time, with their identifier buffers inlined.
-    for (uint8_t i = 0; i < state->heredocs.size; i++) {
+    for (uint32_t i = 0; i < state->heredocs.size; i++) {
         Heredoc *heredoc = array_get(&state->heredocs, i);
 
         buffer[offset++] = (char)heredoc->allow_escapes;
@@ -3175,26 +3184,22 @@ static_assert(
 void tree_sitter_crystal_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
     State *state = (State *)payload;
 
-    // Any deserialized heredocs will overwrite what's here already, so free the
-    // existing heredoc references.
-    free_old_heredoc_identifiers(state);
-
-    // Reset the size of the arrays, but don't touch their reserved memory or capacity.
-    // We can reuse the same content buffers without freeing and reallocating memory.
-    array_clear(&state->literals);
-    array_clear(&state->heredocs);
+    // Start from a safe empty state. Tree-sitter normally gives us bytes emitted
+    // by serialize(), but malformed state must never leave partially restored
+    // scanner arrays behind.
+    reset_deserialized_state(state);
 
     if (length == 0) {
         // Sometimes this function is called with a length of zero. In that
         // case we just finish resetting the state.
-        state->has_leading_whitespace = false;
-        state->previous_line_continued = false;
-
-        reset_macro_state(state);
         return;
     }
 
     size_t offset = 0;
+    if (length < 5) {
+        return;
+    }
+
     state->has_leading_whitespace = (bool)buffer[offset++];
     state->previous_line_continued = (bool)buffer[offset++];
 
@@ -3203,12 +3208,30 @@ void tree_sitter_crystal_external_scanner_deserialize(void *payload, const char 
 
     // The literals array can be deserialized in one chunk.
     uint8_t literals_size = (uint8_t)buffer[offset++];
+    if (literals_size > MAX_LITERAL_COUNT) {
+        goto malformed;
+    }
+    size_t literal_content_size = literals_size * array_elem_size(&state->literals);
+    if (literal_content_size > length - offset) {
+        goto malformed;
+    }
     array_extend(&state->literals, literals_size, &buffer[offset]);
-    offset += literals_size * array_elem_size(&state->literals);
+    offset += literal_content_size;
 
     // Each heredoc must be deserialized individually to handle the identifier buffer.
+    if (offset == length) {
+        goto malformed;
+    }
     uint8_t heredocs_size = (uint8_t)buffer[offset++];
-    for (uint8_t i = 0; i < heredocs_size; i++) {
+    if (heredocs_size > MAX_HEREDOC_COUNT) {
+        goto malformed;
+    }
+
+    size_t heredoc_buffer_size = 0;
+    for (uint32_t i = 0; i < heredocs_size; i++) {
+        if (length - offset < 3) {
+            goto malformed;
+        }
         Heredoc heredoc = {
             .allow_escapes = false,
             .started = false,
@@ -3218,10 +3241,22 @@ void tree_sitter_crystal_external_scanner_deserialize(void *payload, const char 
         heredoc.started = (bool)buffer[offset++];
 
         uint8_t identifier_size = (uint8_t)buffer[offset++];
+        if (identifier_size > MAX_HEREDOC_WORD_SIZE || identifier_size > length - offset ||
+            identifier_size > HEREDOC_BUFFER_SIZE - heredoc_buffer_size) {
+            array_delete(&heredoc.identifier);
+            goto malformed;
+        }
         array_extend(&heredoc.identifier, identifier_size, &buffer[offset]);
         offset += identifier_size;
+        heredoc_buffer_size += identifier_size;
 
         array_push(&state->heredocs, heredoc);
     }
-    assert(offset == length);
+    if (offset != length) {
+        goto malformed;
+    }
+    return;
+
+malformed:
+    reset_deserialized_state(state);
 }
