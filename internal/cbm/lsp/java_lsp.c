@@ -1632,6 +1632,24 @@ static const char *class_super_qn(JavaLSPContext *ctx, TSNode class_node) {
     return NULL;
 }
 
+/* Java enum constants are direct enum_body children, while declarations after
+ * the semicolon live in enum_body_declarations.  LSP class processing only
+ * wants declarations, so expose the nested container for enums and the normal
+ * body for every other type declaration. */
+static TSNode java_type_declaration_body(TSNode node) {
+    TSNode body = ts_node_child_by_field_name(node, "body", 4);
+    if (ts_node_is_null(body) || strcmp(ts_node_type(body), "enum_body") != 0)
+        return body;
+
+    uint32_t count = ts_node_named_child_count(body);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(body, i);
+        if (strcmp(ts_node_type(child), "enum_body_declarations") == 0)
+            return child;
+    }
+    return body;
+}
+
 static void java_process_class_decl(JavaLSPContext *ctx, TSNode node) {
     TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
     if (ts_node_is_null(name_node))
@@ -1664,7 +1682,7 @@ static void java_process_class_decl(JavaLSPContext *ctx, TSNode node) {
     ctx->enclosing_super_qn = super_qn;
     ctx->enclosing_class_short = cname;
 
-    TSNode body = ts_node_child_by_field_name(node, "body", 4);
+    TSNode body = java_type_declaration_body(node);
     if (!ts_node_is_null(body)) {
         CBMScope *saved_scope = ctx->current_scope;
         ctx->current_scope = cbm_scope_push(ctx->arena, saved_scope);
@@ -1779,29 +1797,187 @@ void java_lsp_process_file(JavaLSPContext *ctx, TSNode root) {
 
 /* ── Call-edge resolution ─────────────────────────────────────────── */
 
-static void java_emit_resolved(JavaLSPContext *ctx, const char *callee_qn, const char *strategy,
-                               float confidence) {
+static void java_emit_resolved_orig_kind(JavaLSPContext *ctx, const char *callee_qn,
+                                         const char *orig, const char *strategy, float confidence,
+                                         CBMResolvedKind kind) {
     if (!ctx->resolved_calls || !ctx->enclosing_method_qn || !callee_qn)
         return;
-    CBMResolvedCall rc;
+    CBMResolvedCall rc = {0};
     rc.caller_qn = ctx->enclosing_method_qn;
     rc.callee_qn = callee_qn;
     rc.strategy = strategy;
     rc.confidence = confidence;
-    rc.reason = NULL;
+    rc.kind = kind;
+    // For data-flow resolutions, `reason` may carry the original textual
+    // callee when it differs from the resolved target. NULL for normal calls.
+    rc.reason = orig;
     cbm_resolvedcall_push(ctx->resolved_calls, ctx->arena, rc);
 }
 
-static void java_emit_unresolved(JavaLSPContext *ctx, const char *expr_text, const char *reason) {
+static void java_emit_resolved_orig(JavaLSPContext *ctx, const char *callee_qn, const char *orig,
+                                    const char *strategy, float confidence) {
+    java_emit_resolved_orig_kind(ctx, callee_qn, orig, strategy, confidence,
+                                 CBM_RESOLVED_INVOCATION);
+}
+
+static void java_emit_resolved(JavaLSPContext *ctx, const char *callee_qn, const char *strategy,
+                               float confidence) {
+    java_emit_resolved_orig(ctx, callee_qn, NULL, strategy, confidence);
+}
+
+static void java_emit_resolved_reference(JavaLSPContext *ctx, const char *callee_qn,
+                                         const char *strategy, float confidence) {
+    java_emit_resolved_orig_kind(ctx, callee_qn, NULL, strategy, confidence,
+                                 CBM_RESOLVED_CALL_REFERENCE);
+}
+
+static void java_stamp_resolved_site(JavaLSPContext *ctx, int first, TSNode site) {
+    if (!ctx->resolved_calls || ts_node_is_null(site) || first < 0) {
+        return;
+    }
+    for (int i = first; i < ctx->resolved_calls->count; i++) {
+        ctx->resolved_calls->items[i].site_start_byte = ts_node_start_byte(site);
+        ctx->resolved_calls->items[i].site_end_byte = ts_node_end_byte(site);
+    }
+}
+
+static void java_emit_resolved_reference_at(JavaLSPContext *ctx, const char *callee_qn,
+                                            const char *strategy, float confidence, TSNode site) {
+    int first = ctx->resolved_calls ? ctx->resolved_calls->count : -1;
+    java_emit_resolved_reference(ctx, callee_qn, strategy, confidence);
+    java_stamp_resolved_site(ctx, first, site);
+}
+
+static void java_emit_unresolved_kind(JavaLSPContext *ctx, const char *expr_text,
+                                      const char *reason, CBMResolvedKind kind) {
     if (!ctx->resolved_calls || !ctx->enclosing_method_qn)
         return;
-    CBMResolvedCall rc;
+    CBMResolvedCall rc = {0};
     rc.caller_qn = ctx->enclosing_method_qn;
     rc.callee_qn = expr_text ? expr_text : "?";
     rc.strategy = "lsp_unresolved";
     rc.confidence = 0.0f;
     rc.reason = reason;
+    rc.kind = kind;
     cbm_resolvedcall_push(ctx->resolved_calls, ctx->arena, rc);
+}
+
+static void java_emit_unresolved(JavaLSPContext *ctx, const char *expr_text, const char *reason) {
+    java_emit_unresolved_kind(ctx, expr_text, reason, CBM_RESOLVED_INVOCATION);
+}
+
+static void java_emit_unresolved_reference(JavaLSPContext *ctx, const char *expr_text,
+                                           const char *reason) {
+    java_emit_unresolved_kind(ctx, expr_text, reason, CBM_RESOLVED_CALL_REFERENCE);
+}
+
+static void java_emit_unresolved_reference_at(JavaLSPContext *ctx, const char *expr_text,
+                                              const char *reason, TSNode site) {
+    int first = ctx->resolved_calls ? ctx->resolved_calls->count : -1;
+    java_emit_unresolved_reference(ctx, expr_text, reason);
+    java_stamp_resolved_site(ctx, first, site);
+}
+
+/* Find a sole concrete in-project implementer of interface `iface_qn` that
+ * declares method `mname`. Returns the implementer's QN when exactly ONE
+ * exists (else NULL), and sets *out_count to the number found (capped at 2,
+ * so 2 means "two or more"). Walks the registered-type parent chain to
+ * confirm true subtyping. Mirrors the inline detection that used to live in
+ * resolve_method_call so both the f-found and f-absent interface paths share
+ * identical semantics. */
+static const char *java_find_sole_impl(JavaLSPContext *ctx, const char *iface_qn, const char *mname,
+                                       int *out_count) {
+    const char *first = NULL; /* first distinct impl QN seen */
+    int distinct = 0;         /* distinct impl classes (capped at 2) */
+    const char *iface_dot = strrchr(iface_qn, '.');
+    const char *iface_bare = iface_dot ? iface_dot + 1 : iface_qn;
+    for (int ti = 0; ti < ctx->registry->type_count && distinct < 2; ti++) {
+        const CBMRegisteredType *cand = &ctx->registry->types[ti];
+        if (cand->is_interface || !cand->qualified_name || cand->alias_of)
+            continue;
+        /* Does cand declare `mname`? The method-name array is often empty for
+         * fixture classes; the method REGISTRY is the authoritative source the
+         * dispatch path already uses, so consult it first and fall back to the
+         * name array. */
+        bool has = cbm_registry_lookup_method(ctx->registry, cand->qualified_name, mname) != NULL;
+        if (!has && cand->method_names) {
+            for (int mi = 0; cand->method_names[mi]; mi++) {
+                if (strcmp(cand->method_names[mi], mname) == 0) {
+                    has = true;
+                    break;
+                }
+            }
+        }
+        if (!has)
+            continue;
+        /* Subtype check: walk cand's supertype chain, matching iface by FULL
+         * QN or BARE name. The registry holds duplicate type entries whose
+         * `embedded_types` list a supertype sometimes by short name ("Shape")
+         * and sometimes by full QN ("proj.Shape"); a full-QN-only comparison
+         * silently misses the short-name form, so compare both. */
+        const char *cur = cand->qualified_name;
+        bool subtype = false;
+        for (int hops = 0; hops < JAVA_LSP_MAX_INHERIT_HOPS && cur && !subtype; hops++) {
+            const CBMRegisteredType *ct = cbm_registry_lookup_type(ctx->registry, cur);
+            if (!ct || !ct->embedded_types)
+                break;
+            const char *next = NULL;
+            for (int pi = 0; ct->embedded_types[pi]; pi++) {
+                const char *e = ct->embedded_types[pi];
+                const char *edot = strrchr(e, '.');
+                const char *ebare = edot ? edot + 1 : e;
+                if (strcmp(e, iface_qn) == 0 || strcmp(ebare, iface_bare) == 0) {
+                    subtype = true;
+                    break;
+                }
+                if (!next)
+                    next = e; /* first supertype → continue the walk upward */
+            }
+            cur = next;
+        }
+        if (!subtype)
+            continue;
+        /* Count DISTINCT impl classes: the registry duplicates entries per
+         * class, so dedup by QN — two entries of one class must not read as
+         * two implementers. */
+        if (!first) {
+            first = cand->qualified_name;
+            distinct = 1;
+        } else if (strcmp(first, cand->qualified_name) != 0) {
+            distinct = 2;
+        }
+    }
+    if (out_count)
+        *out_count = distinct;
+    return distinct == 1 ? first : NULL;
+}
+
+/* Emit the resolution for an interface-typed receiver `iface_qn` calling
+ * `mname`: a sole concrete in-project impl → lsp_interface_resolve (resolved
+ * to that impl's method, with a synthesized QN when the method isn't in the
+ * method registry); two-or-more impls → lsp_interface_dispatch on a synthesized
+ * iface-qualified target. Returns true when it emitted (caller should return),
+ * false when there is NO in-project implementer (impl_count == 0) so the caller
+ * can fall back to dispatching on the interface's own method — this keeps JDK
+ * interface calls (List/Stream/Predicate, no in-project impl) resolving via the
+ * strict type_dispatch path instead of being downgraded to interface_dispatch. */
+static bool java_emit_interface_resolution(JavaLSPContext *ctx, const char *iface_qn,
+                                           const char *mname) {
+    int impl_count = 0;
+    const char *sole_impl = java_find_sole_impl(ctx, iface_qn, mname, &impl_count);
+    if (impl_count == 1 && sole_impl) {
+        const CBMRegisteredFunc *cf = cbm_registry_lookup_method(ctx->registry, sole_impl, mname);
+        const char *target =
+            cf ? cf->qualified_name : cbm_arena_sprintf(ctx->arena, "%s.%s", sole_impl, mname);
+        java_emit_resolved(ctx, target, "lsp_interface_resolve", 0.85f);
+        return true;
+    }
+    if (impl_count >= 2) {
+        java_emit_resolved(ctx, cbm_arena_sprintf(ctx->arena, "%s.%s", iface_qn, mname),
+                           "lsp_interface_dispatch", 0.80f);
+        return true;
+    }
+    return false; /* impl_count == 0: caller falls back to type_dispatch. */
 }
 
 static void resolve_method_call(JavaLSPContext *ctx, TSNode call) {
@@ -1852,6 +2028,28 @@ static void resolve_method_call(JavaLSPContext *ctx, TSNode call) {
                 continue;
             char *cls = cbm_arena_strndup(ctx->arena, target, (size_t)(last_dot - target));
             const CBMRegisteredFunc *f = java_lookup_method(ctx, cls, mname, arity);
+            if (!f && ctx->registry) {
+                /* The import is written package-qualified ("demo.Util"), but the
+                 * class is registered under the project/directory QN
+                 * ("<proj>.Util") when the `package` declaration and the file's
+                 * directory differ. Resolve the import's class by its short name
+                 * against the registry and retry — preferring an in-module match.
+                 * Mirrors the C++ short-name type fallback. */
+                const char *cls_dot = strrchr(cls, '.');
+                const char *cls_short = cls_dot ? cls_dot + 1 : cls;
+                size_t sl = strlen(cls_short);
+                for (int ti = 0; ti < ctx->registry->type_count && !f; ti++) {
+                    const char *q = ctx->registry->types[ti].qualified_name;
+                    if (!q) {
+                        continue;
+                    }
+                    size_t ql = strlen(q);
+                    if (ql > sl + 1 && q[ql - sl - 1] == '.' &&
+                        strcmp(q + ql - sl, cls_short) == 0) {
+                        f = java_lookup_method(ctx, q, mname, arity);
+                    }
+                }
+            }
             if (f) {
                 java_emit_resolved(ctx, f->qualified_name, "lsp_static_import", 0.92f);
                 return;
@@ -1920,6 +2118,15 @@ static void resolve_method_call(JavaLSPContext *ctx, TSNode call) {
     if (recv_qn) {
         const CBMRegisteredFunc *f = java_lookup_method(ctx, recv_qn, mname, arity);
         if (f) {
+            /* When the receiver is an interface, java_lookup_method finds the
+             * interface's OWN (abstract/default) method. Prefer resolving to a
+             * sole concrete in-project implementer first; only fall through to
+             * type_dispatch on the interface method when there is NO in-project
+             * impl (e.g. JDK List/Stream/Predicate), keeping those strict. */
+            const CBMRegisteredType *rt0 = cbm_registry_lookup_type(ctx->registry, recv_qn);
+            if (rt0 && rt0->is_interface && java_emit_interface_resolution(ctx, recv_qn, mname)) {
+                return;
+            }
             const char *strategy = "lsp_type_dispatch";
             if (f->receiver_type && strcmp(f->receiver_type, recv_qn) != 0) {
                 strategy = "lsp_inherited_dispatch";
@@ -1927,64 +2134,12 @@ static void resolve_method_call(JavaLSPContext *ctx, TSNode call) {
             java_emit_resolved(ctx, f->qualified_name, strategy, 0.95f);
             return;
         }
-        /* Interface dispatch: walk all registered types implementing the
-         * interface and find a sole concrete impl. */
+        /* Interface dispatch with no directly-registered method: resolve to a
+         * sole concrete impl, else a synthesized iface-qualified dispatch. */
         const CBMRegisteredType *rt = cbm_registry_lookup_type(ctx->registry, recv_qn);
         if (rt && rt->is_interface) {
-            const char *sole_impl = NULL;
-            int impl_count = 0;
-            for (int ti = 0; ti < ctx->registry->type_count && impl_count < 2; ti++) {
-                const CBMRegisteredType *cand = &ctx->registry->types[ti];
-                if (cand->is_interface || !cand->qualified_name || cand->alias_of)
-                    continue;
-                bool has = false;
-                if (cand->method_names) {
-                    for (int mi = 0; cand->method_names[mi]; mi++) {
-                        if (strcmp(cand->method_names[mi], mname) == 0) {
-                            has = true;
-                            break;
-                        }
-                    }
-                }
-                if (!has)
-                    continue;
-                /* Walk parent chain to confirm it's actually a subtype of rt. */
-                const char *cur = cand->qualified_name;
-                bool subtype = false;
-                for (int hops = 0; hops < JAVA_LSP_MAX_INHERIT_HOPS && cur; hops++) {
-                    if (strcmp(cur, recv_qn) == 0) {
-                        subtype = true;
-                        break;
-                    }
-                    const CBMRegisteredType *par = cbm_registry_lookup_type(ctx->registry, cur);
-                    if (!par || !par->embedded_types || !par->embedded_types[0])
-                        break;
-                    /* Walk all parents — pick the first match. */
-                    bool advanced = false;
-                    for (int pi = 0; par->embedded_types[pi]; pi++) {
-                        if (strcmp(par->embedded_types[pi], recv_qn) == 0) {
-                            subtype = true;
-                            cur = NULL;
-                            break;
-                        }
-                    }
-                    if (subtype)
-                        break;
-                    if (!advanced)
-                        cur = par->embedded_types[0];
-                }
-                if (subtype) {
-                    sole_impl = cand->qualified_name;
-                    impl_count++;
-                }
-            }
-            if (impl_count == 1 && sole_impl) {
-                const CBMRegisteredFunc *cf =
-                    cbm_registry_lookup_method(ctx->registry, sole_impl, mname);
-                if (cf) {
-                    java_emit_resolved(ctx, cf->qualified_name, "lsp_interface_resolve", 0.85f);
-                    return;
-                }
+            if (java_emit_interface_resolution(ctx, recv_qn, mname)) {
+                return;
             }
             java_emit_resolved(ctx, cbm_arena_sprintf(ctx->arena, "%s.%s", recv_qn, mname),
                                "lsp_interface_dispatch", 0.80f);
@@ -2500,8 +2655,9 @@ static void resolve_method_reference(JavaLSPContext *ctx, TSNode mref,
     /* Try the last named child first; if it's the same as the LHS (only one
      * named child total), we have a constructor ref where `new` is unnamed. */
     char *mname = NULL;
+    TSNode name_node = {0};
     if (nc_named >= 2) {
-        TSNode name_node = ts_node_named_child(mref, nc_named - 1);
+        name_node = ts_node_named_child(mref, nc_named - 1);
         mname = java_node_text(ctx, name_node);
     }
     if (!mname || !mname[0]) {
@@ -2513,6 +2669,10 @@ static void resolve_method_reference(JavaLSPContext *ctx, TSNode mref,
             const char *ck = ts_node_type(c);
             if (strcmp(ck, "new") == 0) {
                 mname = "new";
+                /* Usage extraction represents `Type::new` by its type leaf,
+                 * because `new` is an unnamed grammar token. Keep the LSP
+                 * occurrence on that same leaf so the two passes join. */
+                name_node = lhs;
                 break;
             }
             if (strcmp(ck, "identifier") == 0) {
@@ -2520,8 +2680,10 @@ static void resolve_method_reference(JavaLSPContext *ctx, TSNode mref,
                 if (ts_node_eq(c, lhs))
                     continue;
                 mname = java_node_text(ctx, c);
-                if (mname && mname[0])
+                if (mname && mname[0]) {
+                    name_node = c;
                     break;
+                }
             }
         }
     }
@@ -2577,7 +2739,7 @@ static void resolve_method_reference(JavaLSPContext *ctx, TSNode mref,
             type_qn = lhs_t->data.template_type.template_name;
     }
     if (!type_qn) {
-        java_emit_unresolved(ctx, mname, "method_reference_unknown_lhs");
+        java_emit_unresolved_reference_at(ctx, mname, "method_reference_unknown_lhs", name_node);
         return;
     }
 
@@ -2587,11 +2749,16 @@ static void resolve_method_reference(JavaLSPContext *ctx, TSNode mref,
         short_name = short_name ? short_name + 1 : type_qn;
         const CBMRegisteredFunc *cf =
             cbm_registry_lookup_method(ctx->registry, type_qn, short_name);
-        if (cf) {
-            java_emit_resolved(ctx, cf->qualified_name, "lsp_method_ref_ctor", 0.90f);
+        /* A constructor reference is precise only when a concrete constructor
+         * callable exists in the registry. Never relabel the class node itself
+         * as a callable target; if the constructor is absent/unmaterialized,
+         * the usage pass will retain the type occurrence as ordinary USAGE. */
+        if (cf && cf->qualified_name) {
+            java_emit_resolved_reference_at(ctx, cf->qualified_name, "lsp_method_ref_ctor", 0.90f,
+                                            name_node);
         } else {
-            java_emit_resolved(ctx, cbm_arena_sprintf(ctx->arena, "%s.%s", type_qn, short_name),
-                               "lsp_method_ref_ctor_synth", 0.80f);
+            java_emit_unresolved_reference_at(
+                ctx, type_qn, "method_reference_constructor_not_materialized", name_node);
         }
         return;
     }
@@ -2611,10 +2778,11 @@ static void resolve_method_reference(JavaLSPContext *ctx, TSNode mref,
     if (!m)
         m = java_lookup_method(ctx, type_qn, mname, 0);
     if (m) {
-        java_emit_resolved(ctx, m->qualified_name, "lsp_method_ref", 0.90f);
+        java_emit_resolved_reference_at(ctx, m->qualified_name, "lsp_method_ref", 0.90f, name_node);
     } else {
-        java_emit_unresolved(ctx, cbm_arena_sprintf(ctx->arena, "%s.%s", type_qn, mname),
-                             "method_reference_no_match");
+        java_emit_unresolved_reference_at(ctx,
+                                          cbm_arena_sprintf(ctx->arena, "%s.%s", type_qn, mname),
+                                          "method_reference_no_match", name_node);
     }
 }
 
@@ -2732,7 +2900,13 @@ static void java_resolve_calls_in_node_inner(JavaLSPContext *ctx, TSNode node) {
     }
 
     if (strcmp(kind, "method_invocation") == 0) {
+        int first_resolution = ctx->resolved_calls ? ctx->resolved_calls->count : -1;
         resolve_method_call(ctx, node);
+        /* Raw CALL extraction records the full method_invocation span. Stamp
+         * the semantic record with that identical occurrence so two calls to
+         * the same method name in one caller retain receiver identity at the
+         * pipeline join (for example alpha.handle(); beta.handle();). */
+        java_stamp_resolved_site(ctx, first_resolution, node);
 
         /* Lambda / method-reference args: re-walk with the SAM-bound scope.
          * This is the central piece that turns chained streams + forEach
@@ -2766,6 +2940,7 @@ static void java_resolve_calls_in_node_inner(JavaLSPContext *ctx, TSNode node) {
         }
     } else if (strcmp(kind, "object_creation_expression") == 0) {
         /* Resolve constructor as a method. */
+        int first_resolution = ctx->resolved_calls ? ctx->resolved_calls->count : -1;
         TSNode type_node = ts_node_child_by_field_name(node, "type", 4);
         if (!ts_node_is_null(type_node)) {
             const CBMType *t = java_parse_type_node(ctx, type_node);
@@ -2786,13 +2961,17 @@ static void java_resolve_calls_in_node_inner(JavaLSPContext *ctx, TSNode node) {
                 if (cf) {
                     java_emit_resolved(ctx, cf->qualified_name, "lsp_constructor", 0.95f);
                 } else {
-                    /* Synth a constructor QN — Class.Class — so downstream
-                     * still gets a resolvable edge. */
-                    java_emit_resolved(ctx, cbm_arena_sprintf(ctx->arena, "%s.%s", qn, short_name),
-                                       "lsp_constructor_synth", 0.85f);
+                    /* No explicit constructor in the registry, so there is no
+                     * `Class.Class` ctor node to point at. Resolve the `new Foo()`
+                     * call to the Foo CLASS node (`qn`) instead: its short name
+                     * equals the textual callee_name ("Foo"), so the pipeline
+                     * join matches, and the class node always exists, so a CALLS
+                     * edge forms carrying the strategy. */
+                    java_emit_resolved(ctx, qn, "lsp_constructor_synth", 0.85f);
                 }
             }
         }
+        java_stamp_resolved_site(ctx, first_resolution, node);
     }
 
     /* catch_clause: push a fresh scope so the bound exception variable is
@@ -2999,6 +3178,19 @@ static const CBMType *parse_param_text(CBMArena *a, const char *text, const char
     return parse_param_text_full(a, text, NULL, module_qn, NULL);
 }
 
+typedef struct {
+    const char *parent_class;
+    const char *module_qn;
+    const CBMTypeRegistry *registry;
+} JavaSignatureParseContext;
+
+static const CBMType *java_signature_parse_type(CBMArena *arena, const char *text,
+                                                void *parser_ctx) {
+    const JavaSignatureParseContext *ctx = (const JavaSignatureParseContext *)parser_ctx;
+    return parse_param_text_full(arena, text, ctx ? ctx->parent_class : NULL,
+                                 ctx ? ctx->module_qn : NULL, ctx ? ctx->registry : NULL);
+}
+
 static void register_local_func_or_type_from_file(JavaLSPContext *ctx, CBMTypeRegistry *reg,
                                                   CBMFileResult *result) {
     CBMArena *a = ctx->arena;
@@ -3163,17 +3355,35 @@ static void register_local_func_or_type_from_file(JavaLSPContext *ctx, CBMTypeRe
          * not "test.Main.Box". */
         const char *parent = d->parent_class;
         const CBMType **ptypes = NULL;
-        if (d->param_types) {
-            int pc = 0;
-            while (d->param_types[pc])
-                pc++;
-            if (pc > 0) {
-                ptypes = (const CBMType **)cbm_arena_alloc(a, (size_t)(pc + 1) * sizeof(*ptypes));
-                for (int j = 0; j < pc; j++) {
-                    ptypes[j] = parse_param_text_full(a, d->param_types[j], parent, module_qn, reg);
+        const char **param_names = NULL;
+        if (d->signature_param_types || d->signature_param_count > 0) {
+            JavaSignatureParseContext parse_ctx = {
+                .parent_class = parent,
+                .module_qn = module_qn,
+                .registry = reg,
+            };
+            ptypes = cbm_type_materialize_signature_params(a, d->signature_param_types,
+                                                           d->signature_param_count,
+                                                           java_signature_parse_type, &parse_ctx);
+        } else if (!d->signature_param_types && d->signature_param_count == 0) {
+            /* Compatibility for callers that still construct CBMDefinition by
+             * hand.  The legacy projection is deduplicated/non-positional, so
+             * it is consulted only when the counted carrier is wholly absent. */
+            if (d->param_types) {
+                int pc = 0;
+                while (d->param_types[pc])
+                    pc++;
+                if (pc > 0) {
+                    ptypes =
+                        (const CBMType **)cbm_arena_alloc(a, (size_t)(pc + 1) * sizeof(*ptypes));
+                    for (int j = 0; j < pc; j++) {
+                        ptypes[j] =
+                            parse_param_text_full(a, d->param_types[j], parent, module_qn, reg);
+                    }
+                    ptypes[pc] = NULL;
                 }
-                ptypes[pc] = NULL;
             }
+            param_names = d->param_names;
         }
         /* Build return types — single return only in Java. */
         const CBMType **rtypes = NULL;
@@ -3186,7 +3396,7 @@ static void register_local_func_or_type_from_file(JavaLSPContext *ctx, CBMTypeRe
             rtypes[0] = parse_param_text_full(a, d->return_types[0], parent, module_qn, reg);
             rtypes[1] = NULL;
         }
-        rf.signature = cbm_type_func(a, d->param_names, ptypes, rtypes);
+        rf.signature = cbm_type_func(a, param_names, ptypes, rtypes);
         if (d->parent_class) {
             rf.receiver_type = d->parent_class;
         }
@@ -3220,29 +3430,17 @@ static void patch_one_method(JavaLSPContext *ctx, CBMTypeRegistry *reg, TSNode m
         return;
     char *method_qn = cbm_arena_sprintf(ctx->arena, "%s.%s", class_qn, mname);
 
-    /* Find the registered func by exact QN. */
-    CBMRegisteredFunc *slot = NULL;
-    for (int fi = 0; fi < reg->func_count; fi++) {
-        if (reg->funcs[fi].qualified_name &&
-            strcmp(reg->funcs[fi].qualified_name, method_qn) == 0) {
-            slot = &reg->funcs[fi];
-            break;
-        }
-    }
-    if (!slot)
-        return;
-
     /* Re-extract param types from the AST. */
     TSNode params = ts_node_child_by_field_name(method_node, "parameters", 10);
     if (ts_node_is_null(params))
         return;
     uint32_t pn = ts_node_named_child_count(params);
-    if (pn == 0)
-        return;
-    const CBMType **ptypes =
-        (const CBMType **)cbm_arena_alloc(ctx->arena, (size_t)(pn + 1) * sizeof(*ptypes));
-    if (!ptypes)
-        return;
+    const CBMType **ptypes = NULL;
+    if (pn > 0) {
+        ptypes = (const CBMType **)cbm_arena_alloc(ctx->arena, (size_t)(pn + 1) * sizeof(*ptypes));
+        if (!ptypes)
+            return;
+    }
     int idx = 0;
     for (uint32_t i = 0; i < pn; i++) {
         TSNode p = ts_node_named_child(params, i);
@@ -3259,7 +3457,37 @@ static void patch_one_method(JavaLSPContext *ctx, CBMTypeRegistry *reg, TSNode m
         }
         ptypes[idx++] = pt;
     }
-    ptypes[idx] = NULL;
+    if (ptypes)
+        ptypes[idx] = NULL;
+
+    /* Java overloads share a graph QN. Select the registry slot whose counted
+     * signature has the same arity as this AST declaration; falling back to the
+     * first QN match keeps the legacy no-signature path best-effort. */
+    CBMRegisteredFunc *slot = NULL;
+    CBMRegisteredFunc *first_qn_match = NULL;
+    for (int fi = 0; fi < reg->func_count; fi++) {
+        CBMRegisteredFunc *candidate = &reg->funcs[fi];
+        if (!candidate->qualified_name || strcmp(candidate->qualified_name, method_qn) != 0)
+            continue;
+        if (!first_qn_match)
+            first_qn_match = candidate;
+        if (!candidate->signature || candidate->signature->kind != CBM_TYPE_FUNC)
+            continue;
+        int candidate_arity = 0;
+        const CBMType *const *candidate_params = candidate->signature->data.func.param_types;
+        if (candidate_params) {
+            while (candidate_params[candidate_arity])
+                candidate_arity++;
+        }
+        if (candidate_arity == idx) {
+            slot = candidate;
+            break;
+        }
+    }
+    if (!slot)
+        slot = first_qn_match;
+    if (!slot)
+        return;
 
     /* Re-extract return type from AST (only for methods, not constructors). */
     const CBMType **rtypes = NULL;
@@ -3305,7 +3533,7 @@ static void patch_method_signatures_from_ast(JavaLSPContext *ctx, CBMTypeRegistr
         class_qn = cbm_arena_strdup(ctx->arena, cname);
     }
 
-    TSNode body = ts_node_child_by_field_name(class_node, "body", 4);
+    TSNode body = java_type_declaration_body(class_node);
     if (ts_node_is_null(body))
         return;
 
@@ -3399,7 +3627,7 @@ static void populate_class_fields_from_ast(JavaLSPContext *ctx, CBMTypeRegistry 
         class_qn = cbm_arena_strdup(ctx->arena, cname);
     }
 
-    TSNode body = ts_node_child_by_field_name(class_node, "body", 4);
+    TSNode body = java_type_declaration_body(class_node);
     if (ts_node_is_null(body))
         return;
     /* Snapshot enclosing-class stack so java_parse_type_node sees inner-class
@@ -3499,20 +3727,10 @@ void cbm_run_java_lsp(CBMArena *arena, CBMFileResult *result, const char *source
 
 /* ── Cross-file LSP ───────────────────────────────────────────────── */
 
-void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
-                            const char *module_qn, CBMLSPDef *defs, int def_count,
-                            const char **import_names, const char **import_qns, int import_count,
-                            TSTree *cached_tree, CBMResolvedCallArray *out) {
-    if (!arena || !source)
-        return;
-
-    CBMTypeRegistry reg;
-    cbm_registry_init(&reg, arena);
-    cbm_java_stdlib_register(&reg, arena);
-
-    /* Register cross-file defs. */
+void cbm_java_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg, const CBMLSPDef *defs,
+                                int def_count) {
     for (int i = 0; i < def_count; i++) {
-        CBMLSPDef *d = &defs[i];
+        const CBMLSPDef *d = &defs[i];
         if (!d->qualified_name || !d->short_name || !d->label)
             continue;
         if (strcmp(d->label, "Class") == 0 || strcmp(d->label, "Interface") == 0 ||
@@ -3546,7 +3764,7 @@ void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
                 emb[idx] = NULL;
                 rt.embedded_types = emb;
             }
-            cbm_registry_add_type(&reg, rt);
+            cbm_registry_add_type(reg, rt);
         } else if (strcmp(d->label, "Method") == 0 || strcmp(d->label, "Function") == 0 ||
                    strcmp(d->label, "Constructor") == 0) {
             CBMRegisteredFunc rf;
@@ -3555,6 +3773,14 @@ void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
             rf.short_name = d->short_name;
             rf.min_params = -1;
             rf.receiver_type = d->receiver_type;
+            JavaSignatureParseContext parse_ctx = {
+                .parent_class = d->receiver_type,
+                .module_qn = d->def_module_qn,
+                .registry = reg,
+            };
+            const CBMType **ptypes = cbm_type_materialize_signature_params(
+                arena, d->signature_param_types, d->signature_param_count,
+                java_signature_parse_type, &parse_ctx);
             /* Build single-return signature from return_types text. */
             const CBMType *ret = NULL;
             if (d->return_types && d->return_types[0]) {
@@ -3574,10 +3800,25 @@ void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
                 rtypes[0] = ret;
                 rtypes[1] = NULL;
             }
-            rf.signature = cbm_type_func(arena, NULL, NULL, rtypes);
-            cbm_registry_add_func(&reg, rf);
+            rf.signature = cbm_type_func(arena, NULL, ptypes, rtypes);
+            cbm_registry_add_func(reg, rf);
         }
     }
+}
+
+void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
+                            const char *module_qn, CBMLSPDef *defs, int def_count,
+                            const char **import_names, const char **import_qns, int import_count,
+                            TSTree *cached_tree, CBMResolvedCallArray *out) {
+    if (!arena || !source)
+        return;
+
+    CBMTypeRegistry reg;
+    cbm_registry_init(&reg, arena);
+    cbm_java_stdlib_register(&reg, arena);
+
+    /* Register cross-file defs. */
+    cbm_java_register_lsp_defs(arena, &reg, defs, def_count);
 
     /* Build the hash indexes: without this every lookup_type/func/method in
      * the walk below is a LINEAR scan over the whole cross registry —

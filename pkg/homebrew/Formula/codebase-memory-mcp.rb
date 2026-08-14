@@ -1,28 +1,28 @@
 class CodebaseMemoryMcp < Formula
   desc "Fast code intelligence engine for AI coding agents"
   homepage "https://github.com/DeusData/codebase-memory-mcp"
-  version "0.6.1"
+  version "0.10.3"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/DeusData/codebase-memory-mcp/releases/download/v#{version}/codebase-memory-mcp-darwin-arm64.tar.gz"
-      sha256 "3468e5df340e53dba2d23cc30bf44210c412dfb2538d7da992465934bf4980e0"
+      sha256 "0ebf02328207d4c3d862c837b5e973de5bac808df92b0941737721d467287f7f"
     end
     on_intel do
       url "https://github.com/DeusData/codebase-memory-mcp/releases/download/v#{version}/codebase-memory-mcp-darwin-amd64.tar.gz"
-      sha256 "a85f8313181c7ffd3a0ac494c0e2bf1b5647f15de06686f8a0728162bf4326ac"
+      sha256 "1107fea28285823e1436e4f38a4e00a0b472d8a43c379da7dfd200c914a4b9dd"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/DeusData/codebase-memory-mcp/releases/download/v#{version}/codebase-memory-mcp-linux-arm64.tar.gz"
-      sha256 "29811aadc2aa99fb9612683af30a06d03fcb2bfefb95c12ea672671827bd111c"
+      sha256 "967b9eababfdbd2ef1987c571d55bc7c028cd1db7f99279830634c58db311e32"
     end
     on_intel do
       url "https://github.com/DeusData/codebase-memory-mcp/releases/download/v#{version}/codebase-memory-mcp-linux-amd64.tar.gz"
-      sha256 "a24c04fd1fd61b08158e011685cf08d860e3594e4ce057ffda57d1cc2f4afdd1"
+      sha256 "74997fb0934e70a22f20c2e112fb4d883867dc1f01a7bcdc94cf86d13b5cbd31"
     end
   end
 

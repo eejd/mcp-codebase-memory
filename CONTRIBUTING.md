@@ -26,7 +26,7 @@ The binary is output to `build/c/codebase-memory-mcp`.
 scripts/test.sh
 ```
 
-This builds with ASan + UBSan and runs all tests (~2040 cases). Key test files:
+This builds with ASan + UBSan and runs the full C test suite. Key test files:
 - `tests/test_pipeline.c` — pipeline integration tests
 - `tests/test_httplink.c` — HTTP route extraction and linking
 - `tests/test_mcp.c` — MCP protocol and tool handler tests
@@ -63,7 +63,7 @@ src/
   watcher/          Git-based background auto-sync
   cli/              CLI subcommands (install, update, uninstall, config)
   ui/               Graph visualization HTTP server (first-party httpd)
-internal/cbm/       Tree-sitter AST extraction (64 languages, vendored C grammars)
+internal/cbm/       Language registry, AST extraction, and vendored grammars
 vendored/           sqlite3, yyjson, mimalloc, xxhash, tre, nomic
 graph-ui/           React/Three.js frontend for graph visualization
 scripts/            Build, test, lint, security audit scripts
@@ -164,4 +164,6 @@ Check [issues labeled `good first issue`](https://github.com/DeusData/codebase-m
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+All contributions are licensed under the project's MIT License (inbound =
+outbound). Submitting a contribution is also subject to GitHub's Terms of
+Service §D.6.
