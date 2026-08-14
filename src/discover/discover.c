@@ -51,14 +51,19 @@ static const char *ALWAYS_SKIP_DIRS[] = {
     /* Misc */
     ".codebase-memory", ".qdrant_code_embeddings", ".tmp", "vendor", "vendored", NULL};
 
-static const char *FAST_SKIP_DIRS[] = {
-    "generated", "gen",           "auto-generated", "fixtures",     "testdata",    "test_data",
-    "__tests__", "__mocks__",     "__snapshots__",  "__fixtures__", "__test__",    "docs",
-    "doc",       "documentation", "examples",       "example",      "samples",     "sample",
-    "assets",    "static",        "public",         "media",        "third_party", "thirdparty",
-    "3rdparty",  "external",      "migrations",     "seeds",        "e2e",         "integration",
-    "locale",    "locales",       "i18n",           "l10n",         "hack",        "bin",
-    "build",     "out",           NULL};
+static const char *FAST_SKIP_DIRS[] = {"generated",    "gen",           "auto-generated",
+                                       "fixtures",     "testdata",      "test_data",
+                                       "__tests__",    "__mocks__",     "__snapshots__",
+                                       "__fixtures__", "__test__",      "docs",
+                                       "doc",          "documentation", "examples",
+                                       "example",      "samples",       "sample",
+                                       "assets",       "static",        "public",
+                                       "media",        "third_party",   "thirdparty",
+                                       "3rdparty",     "external",      "migrations",
+                                       "seeds",        "e2e",           "integration",
+                                       "locale",       "locales",       "i18n",
+                                       "l10n",         "hack",          "bin",
+                                       "build",        "out",           NULL};
 
 /* ── Ignored suffixes ───────────────────────────────── */
 
