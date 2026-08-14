@@ -27,7 +27,6 @@ Things that will genuinely speed it up whenever review does happen:
 - **Keep it rebased** on `main` — the tree is moving quickly right now, and a conflicting branch cannot be reviewed as the diff you intended.
 - **Get CI green**, or say which failures you believe are pre-existing.
 - **Keep the change to one claim.** Bundled features and refactors get split before they get merged, which costs you a round trip.
-- Every commit needs a sign-off (`git commit -s`) — CI enforces DCO.
 
 If this fixes a bug, a reproduction we can run is worth more than a description of the symptom.
 

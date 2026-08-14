@@ -1,6 +1,6 @@
 # PR validation: security gates + lint + full test suite. Builds, smoke and
 # soak stay maintainer-driven via the dry-run workflow_dispatch. Branch
-# protection requires `dco` + `ci-ok` — a single stable summary context that
+# protection requires `ci-ok` — a single stable summary context that
 # fails unless every PR stage succeeded.
 name: PR
 
@@ -148,7 +148,7 @@ jobs:
           CCACHE_MAXSIZE: 1000M
 
   ci-ok:
-    # The one required context (besides dco) — fails unless every PR stage
+    # The one required context — fails unless every PR stage
     # succeeded, so matrix renames can never silently deadlock merges. `skipped`
     # is OK: pr-smoke skips on docs/CI/test-only PRs (changes.product == false).
     needs: [security, lint, test, changes, pr-smoke]
