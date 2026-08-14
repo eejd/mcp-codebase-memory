@@ -18,25 +18,64 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# --selftest: plant a violation and assert the structural layer catches it.
+# Run in CI before the real gate so a silently-broken gate cannot pass.
+if [ "${1:-}" = "--selftest" ]; then
+    TESTDIR="$ROOT/vendored/.gate-selftest-$$"
+    mkdir -p "$TESTDIR"
+    echo "int x;" > "$TESTDIR/x.c"
+    # The child gate exits 1 on the planted violation (that is the point) —
+    # capture its output first so pipefail cannot mask the grep result.
+    GATE_OUT="$("$0" 2>/dev/null || true)"
+    rm -rf "$TESTDIR"
+    if printf '%s' "$GATE_OUT" | grep -q "BLOCKED: vendored code in .*gate-selftest"; then
+        echo "OK: gate self-test — planted violation was detected"
+        exit 0
+    fi
+    echo "FAIL: gate self-test — planted unlicensed file was NOT detected"
+    exit 1
+fi
+
 echo "=== License gate 1/2: structural coverage ==="
+# Rule: every directory under either vendored tree that contains source or
+# data files must have a license file in itself or an ancestor directory
+# WITHIN the vendored tree. No hardcoded component list — newly vendored
+# code with no license is flagged immediately.
 MISS=0
-for d in vendored/*/ \
-    internal/cbm/vendored/lz4 internal/cbm/vendored/simplecpp \
-    internal/cbm/vendored/ts_runtime internal/cbm/vendored/verstable \
-    internal/cbm/vendored/wyhash internal/cbm/vendored/zstd \
-    internal/cbm/vendored/common internal/cbm/vendored/common/tree_sitter \
-    internal/cbm/vendored/grammars/*/; do
-    [ -d "$d" ] || continue
-    if ! ls "$d" | grep -qiE '^(LICENSE|LICENCE|COPYING|UNLICENSE|NOTICE)'; then
-        echo "BLOCKED: no license file in $d"
+has_license_dir() {
+    ls "$1" 2>/dev/null | grep -qiE '^(LICENSE|LICENCE|COPYING|UNLICENSE|NOTICE)'
+}
+for root in vendored internal/cbm/vendored; do
+    find "$root" -type f \
+        \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \
+        -o -name '*.S' -o -name '*.bin' -o -name '*.txt' \) \
+        ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'NOTICE*' \
+        -exec dirname {} \; | LC_ALL=C sort -u | while IFS= read -r d; do
+        cur="$d"
+        covered=1
+        while :; do
+            if has_license_dir "$cur"; then
+                covered=0
+                break
+            fi
+            [ "$cur" = "$root" ] && break
+            cur="$(dirname "$cur")"
+        done
+        if [ $covered -ne 0 ]; then
+            echo "BLOCKED: vendored code in $d has no license file in itself or any ancestor within $root/"
+        fi
+    done > /tmp/license-gate-structural.$$
+    if [ -s /tmp/license-gate-structural.$$ ]; then
+        cat /tmp/license-gate-structural.$$
         MISS=1
     fi
+    rm -f /tmp/license-gate-structural.$$
 done
 if [ $MISS -ne 0 ]; then
     echo "=== LICENSE GATE FAILED (structural) ==="
     exit 1
 fi
-echo "OK: every vendored component directory carries a license file"
+echo "OK: every vendored source directory is covered by a license file"
 
 echo "=== License gate 2/2: ScanCode detection ==="
 if ! command -v scancode &>/dev/null; then
@@ -67,4 +106,19 @@ scancode --license --quiet --processes 2 --json-pp "$STAGE/scan.json" "$STAGE/tr
 }
 
 python3 scripts/license-gate-check.py "$STAGE/scan.json" scripts/license-policy.json
+
+echo "=== License gate 3/3: UI npm production tree ==="
+# The -ui archives ship the compiled frontend in an external asset pack; its
+# production dependency tree must be allow-listed too. --ignore-scripts: no
+# dependency postinstall code runs inside the security job.
+if command -v npm &>/dev/null && [ -f graph-ui/package-lock.json ]; then
+    if [ ! -d graph-ui/node_modules ]; then
+        (cd graph-ui && npm ci --ignore-scripts --silent)
+    fi
+    python3 scripts/license-gate-check-npm.py graph-ui scripts/license-policy.json
+else
+    echo "FAIL: npm or graph-ui/package-lock.json unavailable — UI tree unchecked"
+    exit 1
+fi
+
 echo "=== License gate passed ==="

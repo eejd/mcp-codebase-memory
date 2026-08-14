@@ -13,6 +13,17 @@ The tree-sitter C runtime is vendored in `internal/cbm/vendored/ts_runtime/`.
 - **License:** MIT
 - **Copyright:** (c) 2018–2024 Max Brunsfeld
 
+**Local modification** (`internal/cbm/vendored/ts_runtime/src/stack.c`, #913): a
+single CBM patch bounds the recursive ambiguity-merge in `stack_node_add_link`
+at `CBM_TS_STACK_MERGE_MAX_DEPTH` (512). Deeply nested grammar-ambiguous input
+(e.g. Perl `f(f(f(...)))`) otherwise recurses once per level on the native C
+stack and overflows it during parsing (SIGSEGV on the ~1 MB Windows thread
+stack, and even the 8 MB POSIX stack at extreme depth) before any extractor
+runs. Past the cap the ambiguity is left on the GLR stack instead of merged —
+still a valid parse, never a wrong one — mirroring the existing
+`MAX_LINK_COUNT` bail-out. The change is clearly marked `// CBM patch:` inline.
+**On re-vendor (e.g. ts_runtime → 0.26.x): re-apply this bound.**
+
 The shared scanner helpers in `internal/cbm/vendored/common/` (`scanner.h`,
 `tag.h`) originate from
 [tree-sitter-html](https://github.com/tree-sitter/tree-sitter-html) (MIT,
@@ -26,7 +37,7 @@ The core runtime headers in `internal/cbm/vendored/common/tree_sitter/`
 
 ## Tree-sitter Grammars
 
-158 pre-generated parsers are vendored in `internal/cbm/vendored/grammars/<lang>/`
+159 pre-generated parsers are vendored in `internal/cbm/vendored/grammars/<lang>/`
 (generated `parser.c` plus `scanner.c` where applicable, compiled statically).
 Each grammar is the work of its upstream authors and each grammar directory
 contains the upstream `LICENSE` file.
@@ -38,11 +49,24 @@ cross-registry verification status for every grammar — is
 License summary:
 
 - Nearly all grammars are **MIT**-licensed.
-- `clojure` ([sogaiu/tree-sitter-clojure](https://github.com/sogaiu/tree-sitter-clojure)) is **CC0-1.0**.
-- The first-party grammars authored for this project (`assembly`, `cfml`,
-  `cfscript`, `cobol`, `dotenv`, `form`, `janet`, `magma`, `pine`, `protobuf`,
-  `qml`, `wolfram`) are **MIT** under the project's own license,
-  (c) DeusData.
+- `clojure` ([sogaiu/tree-sitter-clojure](https://github.com/sogaiu/tree-sitter-clojure)) is **CC0-1.0**;
+  `fennel` is **CC0-1.0**; `jinja2` and `just` are **Apache-2.0**;
+  `pine` is **ISC** (declared by its upstream).
+- The grammars authored in-house for this project (`cobol`, `form`, `janet`,
+  `magma`, `protobuf`, `wolfram`) are **MIT** under the project's own license,
+  (c) DeusData. Six further grammars (`assembly`, `cfml`, `cfscript`,
+  `dotenv`, `pine`, `qml`) are self-maintained forks that retain their
+  original upstream authors' licenses — see the manifest for per-grammar
+  provenance.
+
+### tree-sitter-objectscript (UDL + routine)
+
+- **Project:** [intersystems/tree-sitter-objectscript](https://github.com/intersystems/tree-sitter-objectscript)
+- **License:** MIT
+- **Copyright:** (c) 2025 InterSystems Corporation
+- **Vendored at:** `internal/cbm/vendored/grammars/objectscript_udl/`, `internal/cbm/vendored/grammars/objectscript_routine/`
+- **Pinned commit:** `a7ffcdf`
+- **Notes:** InterSystems-maintained grammar for the ObjectScript language (InterSystems IRIS / Caché). Vendor-maintained; not in nvim-treesitter or Helix registries. Each `scanner.c`'s upstream `#include "../../common/scanner.h"` is repointed to a per-directory `objectscript_common.h` copied from upstream `common/scanner.h`; two loop counters in that copy are widened from `uint8_t` to `int` as documented in `internal/cbm/vendored/grammars/MANIFEST.md`.
 
 ## Vendored C/C++ Libraries
 
@@ -58,6 +82,12 @@ License summary:
 | simplecpp | `internal/cbm/vendored/simplecpp/` | 0BSD | [danmar/simplecpp](https://github.com/danmar/simplecpp) |
 | Verstable | `internal/cbm/vendored/verstable/` | MIT | [JacksonAllan/Verstable](https://github.com/JacksonAllan/Verstable) |
 | wyhash | `internal/cbm/vendored/wyhash/` | Unlicense (public domain) | [wangyi-fudan/wyhash](https://github.com/wangyi-fudan/wyhash) |
+
+Local modifications to these libraries are documented next to the
+vendored sources (currently only SQLite: `vendored/sqlite3/PATCHES.md`,
+raising the Unix VFS `MAX_PATHNAME` ceiling from 512 to 4096 to match
+CBM's 4 KiB path support). Patches must be reapplied on every upstream
+refresh and are covered by `scripts/vendored-checksums.txt`.
 
 The graph-UI HTTP server is a first-party implementation
 (`src/ui/httpd.c` + `src/ui/http_server.c`) — no third-party HTTP library
@@ -118,4 +148,7 @@ Release binaries built with `--with-ui` embed the compiled `graph-ui/`
 frontend bundle. Its npm dependencies (React, three.js, @react-three/*,
 radix-ui, lucide-react, tailwindcss, and friends) are all under permissive
 licenses (MIT / ISC / Apache-2.0 / Zlib); the exact set is recorded in
-`graph-ui/package.json` and `graph-ui/package-lock.json`.
+`graph-ui/package.json` and `graph-ui/package-lock.json`, and the per-package
+license texts of the production bundle are appended to the
+`THIRD_PARTY_NOTICES.md` shipped inside the `-ui` release archives
+(generated by `scripts/gen-ui-licenses.py`).
