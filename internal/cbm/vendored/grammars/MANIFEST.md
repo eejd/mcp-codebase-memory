@@ -59,7 +59,7 @@ Re-vendoring from upstream must re-apply these.
 
 | grammar | location | patch | reason |
 |---|---|---|---|
-| crystal    | `crystal/scanner.c`, serialize    | guard `memcpy(&buffer[offset], state->literals.contents, literal_content_size)` with `if (literal_content_size > 0)` | UBSan: zero-length `memcpy` with a NULL/0-size source on the empty-state serialize round-trip (formal UB, harmless) |
+| crystal    | `crystal/scanner.c`, serialize/deserialize | guard zero-length literal `memcpy`; validate serialized array counts, lengths, and total heredoc bytes; reset malformed state; use `uint32_t` heredoc indexes | UBSan empty-state round-trip and CodeQL narrow/wide loop comparisons; malformed external-scanner state must not retain partial data. |
 | rescript   | `rescript/scanner.c`, deserialize | guard `memcpy(state, buffer, n_bytes)` with `if (n_bytes > 0)` | UBSan: zero-length `memcpy` with a NULL `buffer` / `n_bytes == 0` on empty-state deserialize (formal UB, harmless). The sibling serialize copies a fixed `sizeof(ScannerState)` (always > 0, non-NULL src) and needs no guard. |
 | purescript | `purescript/scanner.c`, serialize | guard `memcpy(buffer, indents->data, to_copy)` with `if (to_copy > 0)` | UBSan: zero-length `memcpy` with a NULL/0-size source when the indent vector is empty (formal UB, harmless) |
 

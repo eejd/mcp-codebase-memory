@@ -47,6 +47,11 @@ TEST(crystal_scanner_state_round_trip) {
 }
 
 TEST(crystal_scanner_state_discards_malformed_input) {
+    const char populated_state[] = {
+        1, 1, 1, 0,       /* booleans */
+        1, 2, 3, 4, 5,    /* one PercentLiteral */
+        1, 1, 1, 3, 'f', 'o', 'o', /* one heredoc */
+    };
     const char truncated[] = {1};
     const char too_many_literals[] = {1, 1, 1, 0, 17};
     const char too_many_heredocs[] = {1, 1, 1, 0, 0, 17};
@@ -62,6 +67,8 @@ TEST(crystal_scanner_state_discards_malformed_input) {
         offset += UINT8_MAX;
     }
 
+    tree_sitter_crystal_external_scanner_deserialize(scanner, populated_state,
+                                                     sizeof(populated_state));
     tree_sitter_crystal_external_scanner_deserialize(scanner, truncated, sizeof(truncated));
     ASSERT_EQ(assert_empty_state(scanner), 0);
 
