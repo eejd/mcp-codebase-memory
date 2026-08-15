@@ -430,7 +430,7 @@ static void ipc_test_startup_gate(void *context) {
 static bool ipc_test_startup_gate_wait_acquired(ipc_test_startup_gate_t *gate) {
     /* `acquired` never clears, so this wait cannot miss the event; the bound
      * only catches a thread that never started at all. */
-    for (size_t attempt = 0; attempt < 50000U; attempt++) {
+    for (size_t attempt = 0; attempt < 10000U; attempt++) {
         if (atomic_load(&gate->acquired)) {
             return true;
         }

@@ -30,7 +30,10 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#define cbm_usleep(us) Sleep((DWORD)((us) / 1000))
+/* Sleep accepts milliseconds. Round a non-zero microsecond request up so a
+ * caller asking to yield briefly cannot accidentally receive Sleep(0), which
+ * only yields to an already-runnable peer and provides no bounded delay. */
+#define cbm_usleep(us) Sleep((DWORD)(((us) + 999U) / 1000U))
 #else
 #include <unistd.h>
 #define cbm_usleep(us) usleep((useconds_t)(us))
