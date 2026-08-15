@@ -1,4 +1,4 @@
-# Reusable: smoke test shipped release binaries on all platforms
+# Reusable: smoke test the fork-supported macOS ARM release binary.
 name: Smoke
 
 on:
@@ -30,12 +30,7 @@ jobs:
         env:
           BROAD: ${{ inputs.broad_platforms }}
         run: |
-          CORE_UNIX='[
-            {"os":"ubuntu-latest","goos":"linux","goarch":"amd64"},
-            {"os":"ubuntu-24.04-arm","goos":"linux","goarch":"arm64"},
-            {"os":"macos-14","goos":"darwin","goarch":"arm64"},
-            {"os":"macos-15-intel","goos":"darwin","goarch":"amd64"}
-          ]'
+          CORE_UNIX='[{"os":"macos-14","goos":"darwin","goarch":"arm64"}]'
           # Broad legs reuse existing goos/goarch artifacts on additional OS
           # versions to widen the run-anywhere signal without building new targets.
           # Broad legs are REQUIRED gates (no optional / continue-on-error):
@@ -50,14 +45,11 @@ jobs:
           BROAD_UNIX='[
             {"os":"macos-15","goos":"darwin","goarch":"arm64"}
           ]'
-          CORE_WIN='[{"os":"windows-latest","arch":"amd64"}]'
+          CORE_WIN='[]'
           # windows-11-arm now runs the NATIVE arm64 binary (build-windows-arm64),
           # not the x86_64 binary under emulation — we smoke the artifact we ship.
           BROAD_WIN='[{"os":"windows-2025","arch":"amd64"},{"os":"windows-11-arm","arch":"arm64"}]'
-          CORE_PORTABLE='[
-            {"arch":"amd64","runner":"ubuntu-latest"},
-            {"arch":"arm64","runner":"ubuntu-24.04-arm"}
-          ]'
+          CORE_PORTABLE='[]'
           BROAD_PORTABLE='[
             {"arch":"amd64","runner":"ubuntu-22.04"},
             {"arch":"arm64","runner":"ubuntu-22.04-arm"}
@@ -161,6 +153,7 @@ jobs:
           clamscan --no-summary "$RUNNER_TEMP/cbm-artifact/codebase-memory-mcp"
 
   smoke-windows:
+    if: ${{ false }}
     needs: setup-matrix
     strategy:
       fail-fast: false
@@ -265,6 +258,7 @@ jobs:
           }
 
   smoke-linux-portable:
+    if: ${{ false }}
     needs: setup-matrix
     strategy:
       fail-fast: false
@@ -329,6 +323,7 @@ jobs:
   # the shipped product binaries are unaffected. The red X is the signal to fix
   # the integration, not a release gate.
   smoke-packages:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: true
