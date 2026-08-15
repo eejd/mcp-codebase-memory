@@ -16,6 +16,10 @@ on:
         description: 'Split each C-suite leg across parallel shard jobs (ubuntu x3, windows x2); off = one job per leg, byte-identical to the pre-shard topology'
         type: boolean
         default: false
+      macos_arm_only:
+        description: 'Run only the fork-supported macOS ARM validation surface'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -36,6 +40,7 @@ jobs:
         env:
           BROAD: ${{ inputs.broad_platforms }}
           SHARDS: ${{ inputs.shard_suites }}
+          MACOS_ARM_ONLY: ${{ inputs.macos_arm_only }}
         run: |
           CORE_UNIX='[
             {"os":"ubuntu-latest","cc":"gcc","cxx":"g++"},
@@ -61,7 +66,10 @@ jobs:
           # is a real (non-optional) gate, not a tolerated emulated-flake.
           CORE_WIN='[{"os":"windows-latest","msystem":"CLANG64","pkg":"x86_64"}]'
           BROAD_WIN='[{"os":"windows-2025","msystem":"CLANG64","pkg":"x86_64"},{"os":"windows-11-arm","msystem":"CLANGARM64","pkg":"aarch64"}]'
-          if [ "$BROAD" = "true" ]; then
+          if [ "$MACOS_ARM_ONLY" = "true" ]; then
+            UNIX='[{"os":"macos-14","cc":"cc","cxx":"c++"}]'
+            WIN='[]'
+          elif [ "$BROAD" = "true" ]; then
             UNIX=$(jq -cn --argjson a "$CORE_UNIX" --argjson b "$BROAD_UNIX" '$a + $b')
             WIN=$(jq -cn --argjson a "$CORE_WIN" --argjson b "$BROAD_WIN" '$a + $b')
           else
@@ -179,6 +187,7 @@ jobs:
   # inode/flock behavior and Windows handle/link behavior are each gating,
   # without adding Node/Go provisioning to every sanitizer/container leg.
   test-package-wrappers:
+    if: ${{ !inputs.macos_arm_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +228,7 @@ jobs:
   # parallel suite — catches what an older compiler-rt can miss. Same
   # canonical scripts/test.sh wave as every other leg.
   test-diag:
+    if: ${{ !inputs.macos_arm_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -282,6 +292,7 @@ jobs:
   # list both venues now share. Zero use-of-uninitialized-value findings were
   # reported across the lane on either architecture.
   test-msan:
+    if: ${{ !inputs.macos_arm_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -342,8 +353,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, cc: clang, cxx: clang++ }
-          - { os: ubuntu-24.04-arm, cc: clang, cxx: clang++ }
           - { os: macos-14, cc: cc, cxx: c++ }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -396,6 +405,7 @@ jobs:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
 
   test-windows:
+    if: ${{ !inputs.macos_arm_only }}
     needs: setup-matrix
     strategy:
       fail-fast: false
@@ -515,7 +525,7 @@ jobs:
   # contributes one 1/1 manifest whose slice must equal the full list).
   shard-completeness:
     needs: [test-unix, test-windows]
-    if: always()
+    if: ${{ always() && !inputs.macos_arm_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -542,6 +552,7 @@ jobs:
   # CLI arguments being mangled by the narrow-argv main() (#423/#20, fixed by the
   # wide-argv entrypoint that reads GetCommandLineW).
   test-windows-guards:
+    if: ${{ !inputs.macos_arm_only }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:

@@ -1,4 +1,4 @@
-# Reusable: build release binaries on all supported platforms
+# Reusable: build the fork-supported macOS ARM release binary.
 name: Build
 
 on:
@@ -31,24 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            cc: gcc
-            cxx: g++
-          - os: ubuntu-24.04-arm
-            goos: linux
-            goarch: arm64
-            cc: gcc
-            cxx: g++
           - os: macos-14
             goos: darwin
             goarch: arm64
-            cc: cc
-            cxx: c++
-          - os: macos-15-intel
-            goos: darwin
-            goarch: amd64
             cc: cc
             cxx: c++
     runs-on: ${{ matrix.os }}
@@ -112,6 +97,7 @@ jobs:
           if-no-files-found: error
 
   build-windows:
+    if: ${{ false }}
     runs-on: windows-latest
     timeout-minutes: 240
     steps:
@@ -170,6 +156,7 @@ jobs:
           if-no-files-found: error
 
   build-windows-arm64:
+    if: ${{ false }}
     # Native ARM64 Windows binary via the CLANGARM64 toolchain on the
     # windows-11-arm runner (the same toolchain the test suite already
     # exercises). Without it, ARM-Windows users fall back to the x86_64
@@ -232,6 +219,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-portable:
+    if: ${{ false }}
     # Fully static Linux binaries (gcc -static on Ubuntu).
     # Runs on any Linux distro without shared library dependencies.
     strategy:
@@ -300,7 +288,7 @@ jobs:
   # only choose within that tuple. A hard result on ANY sibling blocks
   # the all-target release rather than selecting around a real detection.
   select-package:
-    needs: [build-unix, build-windows, build-windows-arm64, build-linux-portable]
+    needs: [build-unix]
     runs-on: ubuntu-latest
     timeout-minutes: 330
     permissions:
@@ -323,8 +311,8 @@ jobs:
           python3 scripts/ci/stage-release-candidates.py \
             "$RUNNER_TEMP/release-candidate-artifacts" \
             release-candidate-scan \
-            --expect-targets 8 \
-            --expect-candidates 24
+            --expect-targets 1 \
+            --expect-candidates 3
           # Staging copied and re-hashed every byte into the immutable object
           # set. Drop the redundant artifact-download tree before the VT wait.
           test -n "$RUNNER_TEMP"
@@ -388,11 +376,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          for target in \
-            linux-amd64 linux-arm64 \
-            linux-amd64-portable linux-arm64-portable \
-            darwin-amd64 darwin-arm64 \
-            windows-amd64 windows-arm64; do
+          for target in darwin-arm64; do
             goos="${target%%-*}"
             goarch="${target#*-}"
             selected_name=codebase-memory-mcp
@@ -451,6 +435,7 @@ jobs:
       # Keep the established artifact names so the reusable smoke workflow and
       # all callers consume only the selected, byte-verified containers.
       - name: Upload linux-amd64 containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-linux-amd64
@@ -458,6 +443,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload linux-arm64 containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-linux-arm64
@@ -465,6 +451,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload linux-amd64-portable containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-linux-amd64-portable
@@ -472,6 +459,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload linux-arm64-portable containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-linux-arm64-portable
@@ -479,6 +467,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload darwin-amd64 containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-darwin-amd64
@@ -493,6 +482,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload windows-amd64 containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-windows-amd64
@@ -500,6 +490,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload windows-arm64 containers
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries-windows-arm64
