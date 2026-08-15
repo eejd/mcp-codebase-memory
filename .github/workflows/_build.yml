@@ -37,12 +37,8 @@ jobs:
             cc: cc
             cxx: c++
     runs-on: ${{ matrix.os }}
-    # Every leg is BLOCKING — no continue-on-error. The darwin-amd64 binary
-    # built on macos-15-intel must ship with every release; if that runner is
-    # unavailable the build fails loudly rather than silently publishing a
-    # release with no Intel macOS binary (a user-reported gap). macos-15-intel
-    # is GitHub's supported Intel image through Aug 2027 (the last x86_64 macOS
-    # runner); revisit the Intel leg before that retirement.
+    # The fork-supported Darwin ARM tuple is blocking: a release must never
+    # publish without the artifact this fork can deploy and validate.
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -319,7 +315,7 @@ jobs:
           rm -rf -- "$RUNNER_TEMP/release-candidate-artifacts"
           test ! -e "$RUNNER_TEMP/release-candidate-artifacts"
 
-      - name: Submit all 24 candidates to VirusTotal
+      - name: Submit all Darwin ARM candidates to VirusTotal
         if: ${{ inputs.scan_candidates }}
         uses: crazy-max/ghaction-virustotal@936d8c5c00afe97d3d9a1af26d017cfdf26800a2 # v5.0.0
         id: virustotal-candidates
@@ -366,7 +362,7 @@ jobs:
 
       - name: Reclaim rejected and redundant candidate bytes
         run: |
-          # release-selection owns fresh, hash-verified copies of the eight
+          # release-selection owns fresh, hash-verified copies of the selected
           # chosen executables. No later release step may consume the 24-object
           # scan pool, so discard it before packaging to bound runner disk use.
           rm -rf -- release-candidate-scan/objects
