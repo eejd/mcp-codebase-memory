@@ -350,7 +350,6 @@ jobs:
 
   soak-asan-windows:
     if: ${{ false }}
-    if: ${{ inputs.run_asan }}
     runs-on: windows-latest
     # FIXED 15-min soak (hard-coded below). MSYS2/Wine + ASan build is the
     # slowest path; 60 keeps the budget well above the run length so it is
