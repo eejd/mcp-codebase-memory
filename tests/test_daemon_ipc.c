@@ -197,7 +197,8 @@ static void ipc_test_remove_tree(const char *runtime_dir, const char *parent) {
 #ifdef __APPLE__
 /* Return 1 when installed, 0 only when the backing filesystem does not support
  * Darwin extended ACLs, and -1 for every other fixture failure. */
-static int ipc_test_macos_set_directory_acl(const char *path, bool inheritable, acl_tag_t tag) {
+static int ipc_test_macos_set_directory_acl(const char *path, bool inheritable, acl_tag_t tag,
+                                            bool search_only) {
     if (!path || path[0] == '\0') {
         errno = EINVAL;
         return -1;
@@ -223,10 +224,15 @@ static int ipc_test_macos_set_directory_acl(const char *path, bool inheritable, 
     }
     built = built && acl_set_qualifier(entry, foreign_group_uuid) == 0 &&
             acl_get_permset(entry, &permissions) == 0 && permissions &&
-            acl_clear_perms(permissions) == 0 && acl_add_perm(permissions, ACL_ADD_FILE) == 0 &&
-            acl_add_perm(permissions, ACL_ADD_SUBDIRECTORY) == 0 &&
-            acl_add_perm(permissions, ACL_DELETE_CHILD) == 0 &&
-            acl_set_permset(entry, permissions) == 0;
+            acl_clear_perms(permissions) == 0;
+    if (built && search_only) {
+        built = acl_add_perm(permissions, ACL_SEARCH) == 0;
+    } else if (built) {
+        built = acl_add_perm(permissions, ACL_ADD_FILE) == 0 &&
+                acl_add_perm(permissions, ACL_ADD_SUBDIRECTORY) == 0 &&
+                acl_add_perm(permissions, ACL_DELETE_CHILD) == 0;
+    }
+    built = built && acl_set_permset(entry, permissions) == 0;
 
     if (built && inheritable) {
         built = acl_get_flagset_np(entry, &flags) == 0 && flags && acl_clear_flags_np(flags) == 0 &&
@@ -251,11 +257,15 @@ static int ipc_test_macos_set_directory_acl(const char *path, bool inheritable, 
 }
 
 static int ipc_test_macos_set_mutating_acl(const char *path, bool inheritable) {
-    return ipc_test_macos_set_directory_acl(path, inheritable, ACL_EXTENDED_ALLOW);
+    return ipc_test_macos_set_directory_acl(path, inheritable, ACL_EXTENDED_ALLOW, false);
 }
 
 static int ipc_test_macos_set_deny_acl(const char *path, bool inheritable) {
-    return ipc_test_macos_set_directory_acl(path, inheritable, ACL_EXTENDED_DENY);
+    return ipc_test_macos_set_directory_acl(path, inheritable, ACL_EXTENDED_DENY, false);
+}
+
+static int ipc_test_macos_set_search_only_acl(const char *path) {
+    return ipc_test_macos_set_directory_acl(path, false, ACL_EXTENDED_ALLOW, true);
 }
 
 /* An ACL-less existing path is reported by Darwin either as an empty ACL or,
@@ -4191,6 +4201,52 @@ TEST(daemon_ipc_macos_rejects_allow_acl_on_ancestor_without_mutation) {
     PASS();
 }
 
+TEST(daemon_ipc_macos_accepts_search_only_allow_acl_on_ancestor) {
+    static const char key[] = "cc33dd44ee55ff66";
+    char parent[TEST_PATH_CAP] = {0};
+    char runtime_dir[TEST_PATH_CAP] = {0};
+    struct stat parent_before = {0};
+    struct stat parent_after = {0};
+    struct stat runtime_status = {0};
+
+    bool parent_ok = ipc_test_parent_new(parent, "mac-acl-ancestor-search");
+    int acl_fixture = parent_ok ? ipc_test_macos_set_search_only_acl(parent) : -1;
+    if (acl_fixture == 0) {
+        ipc_test_remove_flat_dir(parent);
+        SKIP_PLATFORM("macOS fixture filesystem has no extended ACL support");
+    }
+    int entries_before = acl_fixture == 1 ? ipc_test_macos_extended_acl_entry_count(parent) : -1;
+    bool snapshot_before = entries_before > 0 && lstat(parent, &parent_before) == 0;
+
+    cbm_daemon_ipc_endpoint_t *endpoint =
+        snapshot_before ? cbm_daemon_ipc_endpoint_new(key, parent) : NULL;
+    if (endpoint) {
+        ipc_test_copy_path(runtime_dir, cbm_daemon_ipc_endpoint_runtime_dir(endpoint));
+    }
+
+    int entries_after = ipc_test_macos_extended_acl_entry_count(parent);
+    bool parent_unchanged = lstat(parent, &parent_after) == 0 &&
+                            parent_before.st_dev == parent_after.st_dev &&
+                            parent_before.st_ino == parent_after.st_ino &&
+                            (parent_before.st_mode & 07777) == (parent_after.st_mode & 07777) &&
+                            entries_after == entries_before;
+    bool runtime_private = runtime_dir[0] != '\0' && lstat(runtime_dir, &runtime_status) == 0 &&
+                           S_ISDIR(runtime_status.st_mode) &&
+                           (runtime_status.st_mode & 0777) == 0700 &&
+                           ipc_test_macos_extended_acl_entry_count(runtime_dir) == 0;
+
+    cbm_daemon_ipc_endpoint_free(endpoint);
+    ipc_test_remove_tree(runtime_dir, parent);
+
+    ASSERT_TRUE(parent_ok);
+    ASSERT_EQ(acl_fixture, 1);
+    ASSERT_TRUE(snapshot_before);
+    ASSERT_NOT_NULL(endpoint);
+    ASSERT_TRUE(parent_unchanged);
+    ASSERT_TRUE(runtime_private);
+    PASS();
+}
+
 TEST(daemon_ipc_macos_repairs_or_rejects_existing_runtime_mutating_acl) {
     static const char key[] = "ee55aa66bb77cc88";
     char parent[TEST_PATH_CAP] = {0};
@@ -4843,6 +4899,7 @@ SUITE(daemon_ipc) {
 #ifdef __APPLE__
     RUN_TEST(daemon_ipc_macos_clears_inherited_deny_acl_from_new_runtime);
     RUN_TEST(daemon_ipc_macos_rejects_allow_acl_on_ancestor_without_mutation);
+    RUN_TEST(daemon_ipc_macos_accepts_search_only_allow_acl_on_ancestor);
     RUN_TEST(daemon_ipc_macos_repairs_or_rejects_existing_runtime_mutating_acl);
     RUN_TEST(daemon_ipc_macos_runtime_acl_injection_invalidates_existing_endpoint);
     RUN_TEST(daemon_ipc_macos_lock_acl_injection_invalidates_retained_startup);

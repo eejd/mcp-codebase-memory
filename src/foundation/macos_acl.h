@@ -8,11 +8,12 @@
  * platforms have no Darwin extended ACL surface, so a valid fd is sufficient. */
 bool cbm_macos_extended_acl_fd_is_empty(int fd);
 
-/* On macOS, succeeds when fd has no extended ACL or every extended ACL entry
- * is an explicit DENY entry.  This is the ancestor-directory predicate: deny
- * entries cannot grant another account mutation authority, while any ALLOW or
- * unrecognized entry fails closed.  Other platforms only validate fd. */
-bool cbm_macos_extended_acl_fd_is_deny_only(int fd);
+/* On macOS, succeeds when fd has no extended ACL, DENY entries, or an explicit
+ * search-only ALLOW entry.  The latter grants directory traversal only and is
+ * commonly used for a headless build identity to reach an operator's checkout;
+ * it grants no read or mutation authority.  All other ALLOW/unrecognized
+ * entries fail closed.  Other platforms only validate fd. */
+bool cbm_macos_extended_acl_fd_is_ancestor_safe(int fd);
 
 /* On macOS, replaces fd's extended ACL with an empty ACL and verifies the
  * result through the same anchored descriptor.  Other platforms are a no-op. */
