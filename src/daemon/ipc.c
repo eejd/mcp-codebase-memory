@@ -1674,7 +1674,7 @@ bool cbm_daemon_ipc_posix_ancestor_stat_ok_for_test(unsigned long owner, unsigne
 static bool posix_directory_parent_secure(int directory_fd) {
     struct stat status;
     if (directory_fd < 0 || fstat(directory_fd, &status) != 0 || !S_ISDIR(status.st_mode) ||
-        !cbm_macos_extended_acl_fd_is_deny_only(directory_fd)) {
+        !cbm_macos_extended_acl_fd_is_ancestor_safe(directory_fd)) {
         return false;
     }
     /* #1537: this ANCESTOR check refused any group-write bit, which is the same
@@ -1773,8 +1773,8 @@ static int private_directory_tree_open(const char *directory_path) {
                  * can act on and weeks of talking past each other. */
                 ipc_validation_detail_set(
                     "%s: the directory CONTAINING '%s' is not a usable private-directory parent "
-                    "(it must be owned by you, not world-writable, and carry no allow-ACL). Check "
-                    "that containing directory, not '%s' itself",
+                    "(it must be owned by you, not world-writable, and carry no ACL that grants "
+                    "more than search). Check that containing directory, not '%s' itself",
                     directory_path, component, component);
             }
             bool created = ok && mkdirat(current_fd, component, 0700) == 0;
