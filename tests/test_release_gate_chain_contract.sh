@@ -126,8 +126,8 @@ if "publish-final" in blocks and "publish-mcp-registry" in needs("publish-final"
 
 # 3. Candidate selection is part of the reusable build boundary. Native jobs
 #    may upload only candidate pairs; the reusable workflow must not complete
-#    until one candidate in each of the eight immutable target tuples has been
-#    scanned, selected, and packaged under the historical binaries-* names.
+#    until one candidate in the fork-supported Darwin ARM target tuple has
+#    been scanned, selected, and packaged under its canonical binaries-* name.
 def workflow_jobs(source):
     result, current, current_name = {}, [], None
     for line in source.splitlines():
@@ -145,8 +145,9 @@ def workflow_jobs(source):
 
 build_jobs = workflow_jobs(build_text)
 select = build_jobs.get("select-package", "")
-native_jobs = ["build-unix", "build-windows", "build-windows-arm64",
-               "build-linux-portable"]
+native_jobs = ["build-unix"]
+disabled_native_jobs = ["build-windows", "build-windows-arm64",
+                        "build-linux-portable"]
 
 if not re.search(r"(?m)^      scan_candidates:\s*\n(?:        [^\n]*\n)*?        default:\s*true\s*$",
                  build_text):
@@ -163,11 +164,10 @@ else:
     selected_needs = set()
     if needs_match:
         selected_needs = {part.strip() for part in needs_match.group(1).split(",")}
-    missing = [job for job in native_jobs if job not in selected_needs]
-    if missing:
+    if selected_needs != set(native_jobs):
         failures.append(
-            "select-package: must need every native candidate producer; missing "
-            + ", ".join(missing))
+            "select-package: must need exactly the fork-supported Darwin ARM "
+            f"candidate producer (got {sorted(selected_needs)})")
 
     timeout = re.search(r"^    timeout-minutes:\s*(\d+)\s*$", select, re.M)
     if not timeout or int(timeout.group(1)) < 300:
@@ -175,7 +175,7 @@ else:
             "select-package: timeout-minutes must be at least 300 so the bounded\n"
             "      four-hour VirusTotal poll can complete before job cleanup.")
 
-    for token in ("--expect-targets 8", "--expect-candidates 24",
+    for token in ("--expect-targets 1", "--expect-candidates 3",
                   "VT_POLL_TIMEOUT_SECONDS: 14400",
                   "scripts/ci/select-release-candidates.py",
                   "scripts/ci/verify-release-selection.py",
@@ -186,7 +186,7 @@ else:
 
     if "release-candidate-scan/objects/*" not in select:
         failures.append(
-            "select-package: VirusTotal must scan only the staged 16 candidate\n"
+            "select-package: VirusTotal must scan only the staged Darwin ARM\n"
             "      objects, not archives, sidecars, or unrelated artifacts.")
     if "--default-stripped" not in select or "unscanned-dry-run" not in select:
         failures.append(
@@ -194,14 +194,7 @@ else:
             "      stripped candidates and record policy state unscanned-dry-run.")
 
     for artifact in (
-        "binaries-linux-amd64",
-        "binaries-linux-arm64",
-        "binaries-linux-amd64-portable",
-        "binaries-linux-arm64-portable",
-        "binaries-darwin-amd64",
         "binaries-darwin-arm64",
-        "binaries-windows-amd64",
-        "binaries-windows-arm64",
         "release-selection-evidence",
     ):
         if f"name: {artifact}" not in select:
@@ -218,6 +211,12 @@ for job in native_jobs:
     if "name: binaries-" in body:
         failures.append(
             f"{job}: must not upload binaries-* before central VirusTotal selection")
+
+for job in disabled_native_jobs:
+    body = build_jobs.get(job, "")
+    if not body or "if: ${{ false }}" not in body:
+        failures.append(
+            f"{job}: unsupported fork target must remain explicitly disabled")
 
 # 4. Release cannot opt out of candidate scanning. Dry-run may do so only via
 #    its explicit, visible skip_virustotal input; either way smoke and soak see
@@ -250,17 +249,22 @@ for caller_name, caller_jobs in (("release", blocks), ("dry-run", dry_jobs)):
             f"{caller_name} soak: release-bound soak must consume the selected binaries-* artifacts")
 
 soak_jobs = workflow_jobs(soak_text)
-for job in ("soak-quick", "soak-quick-windows", "soak-quick-windows-arm64"):
+for job in ("soak-quick",):
     body = soak_jobs.get(job, "")
     for token in ("inputs.use_release_artifacts", "actions/download-artifact@", "cbm-selected-artifact"):
         if token not in body:
             failures.append(f"_soak.yml {job}: selected-artifact mode is missing {token}")
-portable_soak = soak_jobs.get("soak-quick-linux-portable", "")
-for token in ("if: ${{ inputs.use_release_artifacts }}",
-              "binaries-linux-${{ matrix.arch }}-portable",
-              "cbm-selected-artifact"):
-    if token not in portable_soak:
-        failures.append(f"_soak.yml portable soak: missing selected tuple token {token}")
+for job in ("soak-quick-windows", "soak-quick-windows-arm64",
+            "soak-quick-linux-portable", "soak-asan-windows"):
+    body = soak_jobs.get(job, "")
+    if not body or "if: ${{ false }}" not in body:
+        failures.append(f"_soak.yml {job}: unsupported fork lane must remain disabled")
+
+asan_windows = soak_jobs.get("soak-asan-windows", "")
+if "inputs.run_asan" in asan_windows:
+    failures.append(
+        "_soak.yml soak-asan-windows: an unsupported lane must not be revived "
+        "by inputs.run_asan")
 
 # The draft must not merge all workflow artifacts: that would accidentally
 # publish rejected candidates. Download canonical release containers by their
@@ -293,7 +297,7 @@ for token in ("--pattern 'release-selection.tsv'",
 
 # The post-package scan is REQUIRED, not forbidden. It is not a duplicate of the
 # candidate scan: that one covers executables only, while this one covers every
-# distinct object extracted from the 14 shipped containers - install.sh,
+# distinct object extracted from the two shipped containers - install.sh,
 # install.ps1, LICENSE, THIRD_PARTY_NOTICES.md, the MCPB manifest.json and the
 # unpacked UI assets. Those are the bytes users pipe into a shell, and dropping
 # them would narrow the promise made in README.md and SECURITY.md.

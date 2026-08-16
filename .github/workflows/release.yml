@@ -50,7 +50,7 @@ jobs:
   lint:
     uses: ./.github/workflows/_lint.yml
 
-  # ── 2. Tests (all platforms, full suite for release) ────────────
+  # ── 2. Tests (fork-supported macOS ARM surface) ─────────────────
   # skip_tests exists for RE-releases of a tree whose tests are already green:
   # when only packaging/gating changed and the previous run proved the suites,
   # re-running ~2h of tests adds no information. It skips ONLY this phase —
@@ -61,8 +61,9 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with:
       skip_perf: ${{ inputs.skip_perf }}
-      broad_platforms: true
+      broad_platforms: false
       shard_suites: true
+      macos_arm_only: true
 
   # ── 3. Build all platforms ──────────────────────────────────────
   # !cancelled() && !failure(): run when `test` is deliberately skipped, but
@@ -78,8 +79,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       attest: true
-      # Release builds have no scan bypass: both candidates in all eight
-      # immutable target tuples must complete before smoke or soak starts.
+      # This fork publishes only its native macOS ARM tuple.
       scan_candidates: true
     secrets: inherit
 
@@ -96,7 +96,7 @@ jobs:
     needs: [build]
     uses: ./.github/workflows/_smoke.yml
     with:
-      broad_platforms: true
+      broad_platforms: false
 
   # ── 5. Soak tests ──────────────────────────────────────────────
   soak:
@@ -153,12 +153,12 @@ jobs:
           done
 
       - name: List selected artifacts and decision evidence
-        run: ls -la *.tar.gz *.zip *.mcpb *.tsv
+        run: ls -la *.tar.gz *.mcpb *.tsv
 
       - name: Generate checksums
         run: |
           sha256sum \
-            *.tar.gz *.zip *.mcpb \
+            *.tar.gz *.mcpb \
             release-candidates.tsv \
             virustotal-candidate-results.tsv \
             release-selection.tsv \
@@ -195,7 +195,7 @@ jobs:
       - name: Sign artifacts
         run: |
           for f in \
-            *.tar.gz *.zip *.mcpb \
+            *.tar.gz *.mcpb \
             release-candidates.tsv \
             virustotal-candidate-results.tsv \
             release-selection.tsv \
@@ -230,7 +230,6 @@ jobs:
           prerelease: ${{ contains(inputs.version, '-') }}
           files: |
             *.tar.gz
-            *.zip
             *.mcpb
             release-candidates.tsv
             virustotal-candidate-results.tsv
@@ -262,19 +261,19 @@ jobs:
         run: |
           ARCHIVE_DIR="$RUNNER_TEMP/release-archives"
           mkdir -p "$ARCHIVE_DIR" binaries
-          gh release download "$VERSION" --dir "$ARCHIVE_DIR" --repo "$GITHUB_REPOSITORY" --pattern '*.tar.gz' --pattern '*.zip' --pattern '*.mcpb'
+          gh release download "$VERSION" --dir "$ARCHIVE_DIR" --repo "$GITHUB_REPOSITORY" --pattern '*.tar.gz' --pattern '*.mcpb'
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern 'release-selection.tsv' --output "$RUNNER_TEMP/release-selection.tsv"
           python3 scripts/ci/verify-release-selection.py \
             --selection "$RUNNER_TEMP/release-selection.tsv" \
             --require-policy virustotal-v2 \
             --archive-dir "$ARCHIVE_DIR"
-          # 14 = 8 archives + 6 MCPB bundles; runtime 42 = 8×3 archive
-          # sidecars + 6×3 bundle members (manifest.json, LICENSE, notices).
+          # One Darwin ARM archive plus its MCPB bundle; each contributes the
+          # executable and three runtime sidecar/member files.
           # The bundle binaries dedupe to the archive objects byte-for-byte.
           scripts/ci/extract-release-archives.sh "$ARCHIVE_DIR" binaries \
-            --expect-archives=14 \
-            --expect-binaries=14 \
-            --expect-runtime-files=42
+            --expect-archives=2 \
+            --expect-binaries=2 \
+            --expect-runtime-files=6
 
       - name: Download the existing candidate VirusTotal evidence
         env:
